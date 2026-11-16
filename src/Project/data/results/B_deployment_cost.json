@@ -1,0 +1,6 @@
+{
+  "inference per packet, one thread (us)": 159.2121199995745,
+  "packets per second, one thread": 6280.928863975133,
+  "state per flow (bytes)": 1032,
+  "forest trees": 200
+}

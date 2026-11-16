@@ -1,0 +1,250 @@
+{
+  "track": "A",
+  "model": "without TTL, destination port and IAT",
+  "trained model name": "A_128x2_no_testbed",
+  "feature groups": [
+    "sizes",
+    "header lengths",
+    "TCP flags",
+    "TCP window",
+    "protocol",
+    "direction"
+  ],
+  "input columns": [
+    "frame_len",
+    "tcp_window",
+    "ip_hlen",
+    "l4_hlen",
+    "direction",
+    "tcp",
+    "udp",
+    "icmp",
+    "arp_request",
+    "arp_reply",
+    "other_ip",
+    "ipv6",
+    "fin",
+    "syn",
+    "rst",
+    "psh",
+    "ack",
+    "urg",
+    "ece",
+    "cwr",
+    "mask"
+  ],
+  "segment length L": 50,
+  "gru": {
+    "hidden": 128,
+    "layers": 2
+  },
+  "seed": 0,
+  "decision": {
+    "answers": [
+      "High",
+      "Low",
+      "Medium",
+      "OOD"
+    ],
+    "precision targets": {
+      "High": 0.99,
+      "Low": 0.999
+    },
+    "OOD detectors (OOD if any flags)": [
+      "forest",
+      "mahalanobis"
+    ],
+    "OOD budget": 0.05,
+    "prefix buckets": {
+      "1": [
+        1,
+        1
+      ],
+      "2-3": [
+        2,
+        3
+      ],
+      "4-10": [
+        4,
+        10
+      ],
+      "11+": [
+        11,
+        50
+      ]
+    },
+    "default K": 50
+  },
+  "thresholds per K": {
+    "1": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6111502647399902,
+          0.6042660474777222,
+          0.5395143032073975
+        ],
+        "mahalanobis": [
+          211.24441528320312,
+          225.424072265625,
+          286.39239501953125,
+          243.8587188720703
+        ]
+      },
+      "ood quantile": 0.9000000029802322,
+      "tau_attack": 0.9687417954530994,
+      "tau_benign": 0.00139740965965183,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 6672,
+      "block precision": 0.9937050359712231,
+      "block precision, lower 95%": 0.9918654479522329,
+      "Low answers": 3,
+      "Low precision": 1.0,
+      "Low precision, lower 95%": 0.36840314986403877
+    },
+    "3": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6396396160125732,
+          0.613663375377655,
+          0.613183319568634
+        ],
+        "mahalanobis": [
+          226.60952758789062,
+          444.5660095214844,
+          486.1893005371094,
+          441.7378234863281
+        ]
+      },
+      "ood quantile": 0.9700065553188325,
+      "tau_attack": 0.9687417954530994,
+      "tau_benign": 0.0487270123864004,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 14183,
+      "block precision": 0.9912571388281746,
+      "block precision, lower 95%": 0.9898583236562521,
+      "Low answers": 12522,
+      "Low precision": 0.9998402811052548,
+      "Low precision, lower 95%": 0.9994973076351719
+    },
+    "5": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6396396160125732,
+          0.613663375377655,
+          0.6137648224830627
+        ],
+        "mahalanobis": [
+          247.33938598632812,
+          444.5660095214844,
+          514.2775268554688,
+          453.7755126953125
+        ]
+      },
+      "ood quantile": 0.9725605577230452,
+      "tau_attack": 0.9839396355723147,
+      "tau_benign": 0.04360821852570311,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 14140,
+      "block precision": 0.9900990099009901,
+      "block precision, lower 95%": 0.9886164770794623,
+      "Low answers": 12950,
+      "Low precision": 0.9996138996138996,
+      "Low precision, lower 95%": 0.9991883554248918
+    },
+    "10": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6396396160125732,
+          0.613663375377655,
+          0.6154831647872925
+        ],
+        "mahalanobis": [
+          247.33956909179688,
+          481.6246032714844,
+          625.183837890625,
+          502.74652099609375
+        ]
+      },
+      "ood quantile": 0.981168422102928,
+      "tau_attack": 0.9839396355723147,
+      "tau_benign": 0.07595835303150325,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 14239,
+      "block precision": 0.9900976192148325,
+      "block precision, lower 95%": 0.9886205589773805,
+      "Low answers": 16427,
+      "Low precision": 0.9992086199549522,
+      "Low precision, lower 95%": 0.9987420865264209
+    },
+    "20": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6396396160125732,
+          0.6146090626716614,
+          0.6180652379989624
+        ],
+        "mahalanobis": [
+          271.94354248046875,
+          637.964599609375,
+          682.9802856445312,
+          555.7468872070312
+        ]
+      },
+      "ood quantile": 0.9870280355215073,
+      "tau_attack": 0.9856267838460706,
+      "tau_benign": 0.03125820454690063,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 14367,
+      "block precision": 0.990046634648848,
+      "block precision, lower 95%": 0.9885732416776891,
+      "Low answers": 17043,
+      "Low precision": 0.9992958986093997,
+      "Low precision, lower 95%": 0.9988594540841137
+    },
+    "50": {
+      "ood limits": {
+        "forest": [
+          0.6298211216926575,
+          0.6396396160125732,
+          0.6148959398269653,
+          0.6186012625694275
+        ],
+        "mahalanobis": [
+          273.94970703125,
+          641.4727172851562,
+          689.6538696289062,
+          565.431884765625
+        ]
+      },
+      "ood quantile": 0.9878100484609604,
+      "tau_attack": 0.9856267838460706,
+      "tau_benign": 0.016060364427685277,
+      "high target met": true,
+      "low target met": true,
+      "blocks": 14533,
+      "block precision": 0.9900227069428198,
+      "block precision, lower 95%": 0.9885568024464528,
+      "Low answers": 18622,
+      "Low precision": 0.9990334013532381,
+      "Low precision, lower 95%": 0.9985669884688496
+    }
+  },
+  "versions": {
+    "torch": "2.9.0+cpu",
+    "scikit-learn": "1.7.2",
+    "numpy": "2.2.6",
+    "python": "3.13.7"
+  },
+  "note": "unit.joblib holds a scikit-learn Isolation Forest; load it with the same scikit-learn version.",
+  "exported": "2026-11-15 10:34:09"
+}

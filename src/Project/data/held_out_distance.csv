@@ -1,0 +1,47 @@
+capture,attack,outcome,nearest class,distance,segments,median_rank
+ARP MitM,0,abstain (OOD),attack,familiar,3,0.861
+ARP MitM,0,abstain (OOD),attack,unfamiliar,1,0.98
+ARP MitM,0,abstain (OOD),benign,familiar,2,0.267
+ARP MitM,0,abstain (OOD),benign,unfamiliar,1,0.972
+ARP MitM,0,abstain (medium),attack,familiar,749,0.362
+ARP MitM,0,abstain (medium),benign,familiar,1690,0.36
+ARP MitM,0,attack,attack,familiar,4,0.749
+ARP MitM,0,attack,benign,familiar,3,0.664
+ARP MitM,0,benign,benign,familiar,383,0.855
+ARP MitM,0,benign,benign,unfamiliar,164,0.976
+ARP MitM,1,abstain (OOD),attack,familiar,4,0.875
+ARP MitM,1,abstain (medium),attack,familiar,759,0.374
+ARP MitM,1,abstain (medium),benign,familiar,1673,0.349
+ARP MitM,1,attack,attack,familiar,32,0.846
+ARP MitM,1,attack,attack,unfamiliar,3,0.963
+ARP MitM,1,attack,benign,familiar,26,0.866
+ARP MitM,1,benign,attack,familiar,2,0.72
+ARP MitM,1,benign,benign,familiar,355,0.839
+ARP MitM,1,benign,benign,unfamiliar,146,0.972
+Mirai,0,abstain (OOD),attack,familiar,6,0.611
+Mirai,0,abstain (OOD),attack,unfamiliar,2,0.984
+Mirai,0,abstain (OOD),benign,familiar,156,0.865
+Mirai,0,abstain (OOD),benign,unfamiliar,110,0.986
+Mirai,0,abstain (medium),attack,familiar,40,0.372
+Mirai,0,abstain (medium),attack,unfamiliar,2,0.987
+Mirai,0,abstain (medium),benign,familiar,3,0.77
+Mirai,0,abstain (medium),benign,unfamiliar,17,0.995
+Mirai,0,attack,attack,familiar,48,0.189
+Mirai,0,attack,attack,unfamiliar,4,0.999
+Mirai,0,attack,benign,familiar,1,0.707
+Mirai,0,attack,benign,unfamiliar,1,0.966
+Mirai,0,benign,attack,unfamiliar,1,0.999
+Mirai,0,benign,benign,unfamiliar,134,0.999
+Mirai,1,abstain (OOD),attack,familiar,44,0.858
+Mirai,1,abstain (OOD),attack,unfamiliar,12,1.0
+Mirai,1,abstain (OOD),benign,familiar,96,0.865
+Mirai,1,abstain (OOD),benign,unfamiliar,79,0.994
+Mirai,1,abstain (medium),attack,familiar,9,0.533
+Mirai,1,abstain (medium),attack,unfamiliar,2,0.999
+Mirai,1,abstain (medium),benign,unfamiliar,8,0.999
+Mirai,1,attack,attack,familiar,73,0.67
+Mirai,1,attack,attack,unfamiliar,95,0.983
+Mirai,1,attack,benign,familiar,1,0.788
+Mirai,1,attack,benign,unfamiliar,16,1.0
+Mirai,1,benign,attack,unfamiliar,6,0.998
+Mirai,1,benign,benign,unfamiliar,78,0.999

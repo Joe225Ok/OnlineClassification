@@ -1,0 +1,33 @@
+{
+  "track": "A",
+  "arch": "128x2",
+  "final": {
+    "main": [
+      "sizes",
+      "header lengths",
+      "TCP flags",
+      "TCP window",
+      "protocol",
+      "direction",
+      "IAT",
+      "TTL",
+      "destination port"
+    ],
+    "without TTL, destination port and IAT": [
+      "sizes",
+      "header lengths",
+      "TCP flags",
+      "TCP window",
+      "protocol",
+      "direction"
+    ]
+  },
+  "models": {
+    "main": [
+      "A_size_128x2"
+    ],
+    "without TTL, destination port and IAT": [
+      "A_128x2_no_testbed"
+    ]
+  }
+}

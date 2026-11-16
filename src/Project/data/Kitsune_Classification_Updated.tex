@@ -1,0 +1,265 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{tabularx}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\renewcommand{\arraystretch}{1.12}
+% Table rules
+\newcommand{\toprule}{\noalign{\hrule height 0.8pt\vskip 3pt}}
+\newcommand{\midrule}{\noalign{\vskip 2pt\hrule height 0.4pt\vskip 3pt}}
+\newcommand{\bottomrule}{\noalign{\vskip 2pt\hrule height 0.8pt}}
+
+% Tables and figures stay where they are written
+\makeatletter
+\newenvironment{ptable}{\par\medskip\noindent\begin{minipage}{\linewidth}\centering\def\@captype{table}}{\end{minipage}\par\medskip}
+\newenvironment{pfigure}{\par\medskip\noindent\begin{minipage}{\linewidth}\centering\def\@captype{figure}}{\end{minipage}\par\medskip}
+\makeatother
+\raggedbottom
+
+\title{Trustworthy Early Network Traffic Classification:\\ An Abstaining Online Learning-Based Classifier\\ with
+Data-Quality Auditing}
+\author{Joe}
+\date{October 31, 2026}
+
+\begin{document}
+\maketitle
+
+\section{Motivation}
+
+AI systems now drive decisions where errors are costly: scoring suspicious transactions in anti-money laundering, controlling autonomous cars, or deciding whether network traffic is benign or an attack. Network security adds two constraints. Most traffic is encrypted and payload inspection raises privacy concerns, so a classifier should rely on packet headers. And threats must be stopped early, so it cannot wait for a flow to finish before deciding.
+
+Accuracy alone does not make such a classifier trustworthy. Neural networks are often overconfident~\cite{guo}, most classifiers answer even on traffic unlike anything seen in training, and popular traffic datasets contain duplicate samples, which inflate reported accuracy, and conflicting labels, which cap what any model can reach~\cite{jerabek}. This project builds an online packet-header classifier that audits its data first and answers only when it has grounds to. A wrong promise is treated as worse than ``I don't know.''
+
+\section{Introduction and summary}
+
+The project classifies traffic in the Kitsune Network Attack dataset~\cite{kitsune} as benign or attack, online, from packet headers, one packet at a time. It implements the research direction of our survey of 25 papers~\cite{survey}, which found three gaps. None of the reviewed early or header-based classifiers (for example~\cite{bernaille,giryes,hu}) evaluates calibration. The traffic papers that apply uncertainty methods use raw bytes or flow statistics, not headers. And no paper combines a reject option with a check of the dataset's maximum achievable accuracy (MaxAcc).
+
+The classifier has four possible answers:
+
+\begin{itemize}
+  \item \textbf{High:} ``I know: attack.'' The probability of attack is high, and the flow is blocked.
+  \item \textbf{Low:} ``I know: benign,'' for the current segment only. It is reported, and the next segment is judged afresh.
+  \item \textbf{Medium:} ``I don't know.''
+  \item \textbf{Out of distribution (OOD):} ``I don't know this pattern.'' The traffic is flagged for labelling and future training.
+\end{itemize}
+
+The classifier's only action is to block what it identifies as an attack. Low, Medium and OOD traffic keeps passing, and how to handle it, for example logging it, sending it to another detector or queueing it for labelling, is a policy decision for the network's operators.
+
+\textbf{Goal.} Block as many attacks as possible, within as few packets as possible, while rarely blocking benign traffic. Just as important, say ``I know: benign'' only when sure, so that traffic can be trusted: a benign answer must almost never be an attack. When the classifier is sure of neither, it says ``I don't know'' rather than guessing; these in-between answers let traffic pass and are reported only to measure performance.
+
+\section{Anticipated objectives}
+
+\begin{enumerate}
+  \item \textbf{A data-quality report for Kitsune:} before any split, how much of the data repeats (a warning of leakage) and which sequences carry both labels (candidates for manual relabelling).
+  \item \textbf{A leakage-aware benchmark:} under a temporal split, measure the effect of conflicting labels (Track A against Track B) and of repeated traffic (all test rows against those never seen in training), with baselines the model must beat, and report the maximum achievable accuracy next to every forced-answer result.
+  \item \textbf{``I know'' performance:} when the classifier answers High or Low, how often it answers and how often it is right, per attack type: the share of attack segments blocked, the share of blocks that are real attacks, the share of benign answers that are really benign, and the share of attacks called benign, together with the speed of blocking: the mean number of packets, and the share blocked by packet 1, 3, 5, 10, 20 and 50.
+  \item \textbf{Honest abstention:} on traffic it was not trained on, the only correct answer is ``I don't know.''
+  \item \textbf{An early decision:} one decision per segment within its $L = 50$ packets: an attack is blocked at any packet, and a benign answer waits for the segment's end.
+  \item \textbf{A deployable classifier:} each trained model is saved with everything its decisions need, so that it can classify new captures.
+\end{enumerate}
+
+\section{Dataset}
+
+Kitsune~\cite{kitsune} was captured on a commercial IP surveillance network and an IoT network, and is distributed through the UCI repository. It contains nine attacks, each in its own capture that mixes benign and malicious traffic (Table~\ref{tab:data}). We use only the raw PCAP files and the per-packet labels. Mirai and ARP MitM are held out to test behaviour on unseen traffic.
+
+\begin{ptable}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Category & Attacks & Role \\
+\midrule
+Reconnaissance & OS Scan, Fuzzing & Train/val/test \\
+Man in the middle & Video Injection, Active Wiretap & Train/val/test \\
+Denial of service & SSDP Flood, SYN DoS, SSL Renegotiation & Train/val/test \\
+Man in the middle & ARP MitM & Held out: same network \\
+Botnet & Mirai & Held out: different network \\
+\bottomrule
+\end{tabular}
+\caption{Kitsune attacks and their role in this project.}\label{tab:data}
+\end{ptable}
+
+\section{Methodology}
+
+\textbf{Data preparation.} Packets from each PCAP are grouped into bidirectional flows, and each flow is cut into
+segments of $L = 50$ packets; a segment is one sample, labelled attack if any of its packets is malicious. Each packet
+has nine feature groups: packet size, header lengths, TCP flags, TCP window, protocol, direction, inter-arrival time
+(IAT), time to live (TTL) and destination port. Addresses and source ports only group packets and are never inputs.
+TTL, destination port and IAT may describe this testbed more than the traffic, so they form a \emph{testbed group},
+and a second model is trained without it.
+
+\textbf{Data diagnostics.} Before any split, on the first $k$ packets of every segment: the \emph{distinct share}
+(distinct header sequences over all segments, labels ignored), a warning of leakage, and the \emph{conflicting
+sequences} (identical sequences with both labels), which are either mislabels to correct where possible or genuinely
+ambiguous.
+
+\textbf{Benchmark.} Two tracks (Table~\ref{tab:tracks}): Track A keeps the labels as recorded; Track B removes the
+conflicting sequences, the best case after manual review. Results on real data, where conflicting labels are addressed
+when possible, are expected to fall between the two. Each capture is split by time: 60\% training, 20\% validation,
+20\% test. Results are reported on all test rows and, as a stress test of new patterns, on the rows whose sequence never
+appears in training. $k$-NN and XGBoost serve as baselines.
+
+\begin{ptable}
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Track & Scenario & Conflicting sequences & Split \\
+\midrule
+A & Labels as recorded & Kept & Temporal \\
+B & Best case after manual review & Removed & Temporal \\
+\bottomrule
+\end{tabular}
+\caption{The two benchmark tracks. The number of segments removed in Track B is reported.}\label{tab:tracks}
+\end{ptable}
+
+\textbf{Ceilings.} Forced answers ($P(\text{attack})\ge0.5$) are reported next to the maximum achievable accuracy of
+Jerabek et al.~\cite{jerabek}, computed on exactly the scored rows: an oracle gets every single-label sequence right and
+gives each cluster $C_i$ of identical sequences with both labels its majority label,
+\begin{equation}
+\mathrm{MaxAcc} = \frac{N_{\mathrm{unique}} + N_{\mathrm{same}} + \sum_i \#\mathrm{Maj}(C_i)}{N},
+\end{equation}
+with $N_{\mathrm{unique}}$ the sequences seen once and $N_{\mathrm{same}}$ the copies of single-label sequences. $1 -
+\mathrm{MaxAcc}$ is the error conflicting labels force on any model. A ceiling
+bounds a model only when computed on exactly the fields it reads.
+
+\textbf{Model.} A causal GRU reads one packet at a time and outputs $P(\text{attack})$ after every packet; with the loss
+applied at every packet, one model answers at any packet. Its size is chosen on validation data. Each track has a
+\emph{main model} on all nine feature groups and a model without the testbed group; a variant that carries memory
+across a flow's segments is also compared. Random steps use a fixed seed. Probabilities are calibrated by temperature
+scaling~\cite{guo}, one temperature per range of packets seen (1, 2--3, 4--10, 11+), fitted on the first validation
+half and capped so that calibration never makes the model more confident.
+
+\textbf{Online decision} (Figure~\ref{fig:flow}). Packets are read one at a time up to the decision packet $K$ (the
+segment's end unless a smaller $K$ is chosen), or until an OOD or High answer ends the decision.
+\begin{itemize}
+\item \emph{OOD check first.} Two OOD detectors, an Isolation Forest~\cite{iforest} and the Mahalanobis distance to
+the nearer class mean~\cite{mahalanobis}, run alongside the GRU; they are not part of it and do not change it. Their
+input is the GRU's hidden state, its summary of the packets read so far, which the GRU computes anyway and which
+reflects what it learned from the training traffic. Both are fitted on the hidden states of the training packets.
+At every packet, each detector scores the current hidden state; its scores are averaged over the segment's packets so
+far, so a single unusual packet is diluted (at packet 1 the average is that packet's score), and the average is
+compared with that detector's threshold for the range of packets seen. The two are combined with an OR rule: the
+segment is OOD if either detector flags it, since each may catch traffic the other misses. The thresholds are set so
+that at most 5\% of known validation segments are flagged. Traffic absent from training is not necessarily OOD: it may
+resemble known traffic.
+\item \emph{High}: if $P(\text{attack})\ge\tau_H$, the flow is blocked at once.
+\item \emph{Low or Medium}: at packet $K$, Low if $P(\text{attack})\le\tau_L$, otherwise Medium (``I don't know''); a
+benign start does not make a segment benign.
+\end{itemize}
+Following selective classification~\cite{selective}, $\tau_H$ and $\tau_L$ come from precision targets on the second
+validation half: at least 99\% of blocks are attacks and 99.9\% of Low answers benign; a target that cannot be met means
+that answer is never given.
+
+\begin{pfigure}
+\small
+\setlength{\unitlength}{1mm}
+\begin{picture}(150,64)
+% Boxes
+\put(0,50){\framebox(28,12){\shortstack{Packet $k$\\GRU: $p_k$, $h_k$}}}
+\put(38,50){\framebox(24,12){\shortstack{OOD check\\on $\bar{s}_k$}}}
+\put(72,50){\framebox(28,12){\shortstack{High:\\$p_k \ge \tau_H$?}}}
+\put(115,50){\framebox(35,12){\shortstack{Attack:\\block the flow}}}
+\put(72,30){\framebox(28,10){Is $k < K$?}}
+\put(115,30){\framebox(35,10){Low: $p_k \le \tau_L$?}}
+\put(26,0){\framebox(48,12){\shortstack{OOD: I don't know this\\pattern; flag for labelling}}}
+\put(96,0){\framebox(26,12){\shortstack{Benign:\\this segment}}}
+\put(126,0){\framebox(24,12){\shortstack{Medium:\\I don't know}}}
+% Packet to OOD check to High
+\put(28,56){\vector(1,0){10}}
+\put(62,56){\vector(1,0){10}}
+\put(67,57){\makebox(0,0)[b]{no}}
+% OOD flag
+\put(50,50){\vector(0,-1){38}}
+\put(51,44){yes}
+% High blocks at once
+\put(100,56){\vector(1,0){15}}
+\put(107.5,57){\makebox(0,0)[b]{yes}}
+\put(86,50){\vector(0,-1){10}}
+\put(87,44){no}
+% Next packet
+\put(72,35){\line(-1,0){58}}
+\put(14,35){\vector(0,1){15}}
+\put(67,36){\makebox(0,0)[b]{yes}}
+\put(15,36){next packet $k+1$}
+% At the end of the segment
+\put(100,35){\vector(1,0){15}}
+\put(107.5,36){\makebox(0,0)[b]{no}}
+\put(132.5,30){\line(0,-1){8}}
+\put(109,22){\line(1,0){29}}
+\put(109,22){\vector(0,-1){10}}
+\put(138,22){\vector(0,-1){10}}
+\put(110,15){yes}
+\put(139,15){no}
+\end{picture}
+\caption{Decision for one packet. The GRU gives $p_k$, the probability of attack, and its hidden state $h_k$; the OOD detectors (Isolation Forest and Mahalanobis, separate from the GRU) score $h_k$, and $\bar{s}_k$ is the mean of each detector's scores over the segment's packets 1 to $k$; the check flags OOD if either mean is over its threshold. OOD and High end the decision at once; Low or Medium is decided at the decision packet $K$ (the segment's last packet if it is shorter).}\label{fig:flow}
+\end{pfigure}
+
+\textbf{Evaluation.} The headline is ``I know'' performance (High or Low answers): coverage, attacks blocked, block
+precision, Low precision, attacks called benign, and accuracy and macro-F1 on answered segments, for both models of each
+track on all and unseen test rows at $K = 1, 3, 5, 10, 20, 50$; for the main model also per attack type and with
+intervals from resampling whole flows. Forced answers are compared with MaxAcc on the same rows. Block precision is
+also given at an assumed 1\% attack rate. Further checks: drift over the test period, evasion (IAT jitter, size
+padding), and memory and time per packet. On traffic not seen in training, any High or Low answer is a failure; this is
+tested on the held-out captures, by leaving out one capture at a time, and by training on earlier captures and testing
+on later ones~\cite{tesseract}. Two more experiments retrain with labelled OOD-flagged segments and follow whole flows
+with memory reset or carried.
+
+\textbf{Deployment.} Each final model is saved with its standardisation, temperatures, OOD detectors and thresholds,
+so that a new capture (PCAP or PCAPNG) can be segmented and classified without refitting; with labels, the same metrics
+are computed.
+
+% \section{Future work}
+
+% The following are left for later; some may not be needed if the planned results are sufficient: selecting feature groups by leaving one group out at a time; training each final model with more seeds; other segment lengths, since early answers are already measured by the cut-off $K$; two further cleaning scenarios, removing duplicate sequences with or without their conflicts, which are unlikely to match real-world data; and other OOD detectors, such as energy scores or a detector on the raw header inputs.
+
+\section{Schedule}
+
+The project runs from October 14 to November 30, 2026. The final report is expected by November 30. The last period includes Thanksgiving (November 26).
+
+\begin{ptable}
+\small
+\begin{tabularx}{\linewidth}{@{}p{3.2cm}X>{\raggedright\arraybackslash}p{3.6cm}@{}}
+\toprule
+Dates (2026) & Work & Deliverable \\
+\midrule
+Oct 14 -- Oct 31 & Data search and methodology refinement & Proposal \\
+Nov 1 -- Nov 7 & Parse headers; rebuild flows; data-quality audit & Data-quality report \\
+Nov 8 -- Nov 14 & Build Tracks A and B; baselines; train the GRUs & Baselines and online classifier \\
+Nov 15 -- Nov 21 & Calibration, OOD detection and decision thresholds & Calibration and OOD results \\
+Nov 22 -- Nov 30 & Experiments; final evaluation; save the deployable models; write the report & Final report (Nov 30) \\
+\bottomrule
+\end{tabularx}
+\end{ptable}
+
+{\small
+\begin{thebibliography}{99}
+
+\bibitem{kitsune} Y. Mirsky, T. Doitshman, Y. Elovici, A. Shabtai, ``Kitsune: An Ensemble of Autoencoders for Online Network Intrusion Detection,'' in \emph{Proc. NDSS}, 2018. Dataset: Kitsune Network Attack Dataset, UCI Machine Learning Repository, \url{https://archive.ics.uci.edu/dataset/516/kitsune+network+attack+dataset}
+
+\bibitem{jerabek} K. Jerabek, J. Luxemburk, R. Plný, J. Koumar, J. Pešek, K. Hynek, ``When Simple Model Just Works: Is Network Traffic Classification in Crisis?'' arXiv:2506.08655, 2025. \url{https://arxiv.org/abs/2506.08655}
+
+\bibitem{survey} [Author], ``Trustworthy Early Network Traffic Classification: A Survey of Header-Based Learning, Initial-Packet Analysis, Uncertainty, and Reliability,'' 2026.
+
+\bibitem{bernaille} L. Bernaille, R. Teixeira, K. Salamatian, ``Early Application Identification,'' in \emph{Proc. ACM CoNEXT}, 2006.
+
+\bibitem{giryes} R. Giryes, L. Shafir, A. Wool, ``A Flow is a Stream of Packets: A Stream-Structured Data Approach for DDoS Detection,'' arXiv:2405.07232, 2024.
+
+\bibitem{hu} Y. Hu, Z. Zeng, J. Song, L. Xu, X. Zhou, ``Online Network Traffic Classification Based on External Attention and Convolution by IP Packet Header,'' \emph{Computer Networks}, vol. 252, art. 110656, 2024.
+
+\bibitem{guo} C. Guo, G. Pleiss, Y. Sun, K. Q. Weinberger, ``On Calibration of Modern Neural Networks,'' in \emph{Proc. ICML}, 2017.
+
+\bibitem{selective} Y. Geifman, R. El-Yaniv, ``Selective Classification for Deep Neural Networks,'' in \emph{Proc. NeurIPS}, 2017.
+
+\bibitem{iforest} F. T. Liu, K. M. Ting, Z.-H. Zhou, ``Isolation Forest,'' in \emph{Proc. IEEE ICDM}, 2008.
+
+\bibitem{mahalanobis} K. Lee, K. Lee, H. Lee, J. Shin, ``A Simple Unified Framework for Detecting Out-of-Distribution Samples and Adversarial Attacks,'' in \emph{Proc. NeurIPS}, 2018.
+
+\bibitem{tesseract} F. Pendlebury, F. Pierazzi, R. Jordaney, J. Kinder, L. Cavallaro, ``TESSERACT: Eliminating Experimental Bias in Malware Classification Across Space and Time,'' in \emph{Proc. USENIX Security}, 2019, pp. 729--746.
+
+\end{thebibliography}
+}
+
+\end{document}

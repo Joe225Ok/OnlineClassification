@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# LaTeX build residue (the .tex and .pdf are kept)
+*.aux
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc
+*.bbl
+*.blg
+*.nav
+*.snm
+build.log
+src/Project/report/Kitsune_Report.log
+src/Project/overview/Implementation_Overview.log
+src/Project/data/Kitsune_Classification_Updated.log
+
+# Raw captures and stage-0 intermediates (gigabytes; rebuilt by pipeline/s0_prepare.py)
+src/Project/data/*.zip
+src/Project/data/*.pcap
+src/Project/data/*.pcapng
+src/Project/data/*.npy
+src/Project/data/*.npz
+src/Project/data/*.parquet
+src/Project/data/packets/
+src/Project/data/view/
+src/Project/data/preview/
+src/Project/data/models/
+
+# Per-run outputs: logs, pre-run backups, inference results
+src/Project/runs/
+
+src/Project/slides/
+
+src/Project/slides/
+
+src/Project/report_notes.md
+
+# Kept locally, not published: superseded drafts, the overview document, page previews, old v1 models
+src/Project/archive/
+src/Project/overview/
+src/Project/report/
+src/Project/report_tools/
+src/Project/data/Kitsune_Classification.pdf

@@ -1,0 +1,4 @@
+model,finished,seconds,source
+A_size_64,2026-11-07 00:25:42,,start time not recorded
+A_size_128,2026-11-07 00:38:08,746,gap between this file and the previous model's file (training ran back to back)
+A_size_128x2,2026-11-07 01:15:07,2219,gap between this file and the previous model's file (training ran back to back)

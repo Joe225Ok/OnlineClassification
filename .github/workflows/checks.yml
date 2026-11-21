@@ -10,11 +10,11 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history, for SonarQube's blame information
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -34,10 +34,12 @@ jobs:
       # SonarQube Cloud: runs only once the repository has a SONAR_TOKEN secret; until then this step is skipped and the
       # job still passes. Settings: sonar-project.properties. The project's Automatic Analysis must be off in SonarQube
       # Cloud (Administration > Analysis Method), or this CI analysis is refused.
-      # Check the action's current major version at https://github.com/marketplace/actions/official-sonarqube-scan
+      # v8 (v5 is no longer supported: GitHub's warning on the first run); v8 verifies the scanner's signature with gpg,
+      # which ubuntu-latest has. Current version:
+      # https://github.com/marketplace/actions/official-sonarqube-scan
       - name: SonarQube analysis
         if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 

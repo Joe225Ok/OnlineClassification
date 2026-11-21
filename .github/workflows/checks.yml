@@ -1,20 +1,25 @@
-# Unit tests, lint and coverage on every push and pull request; SonarQube analysis when a token is configured.
+# Unit tests, lint and coverage on every push and pull request, then a SonarQube Cloud analysis with that coverage.
 # The tests need no data files (tests/ builds every input by hand), so they run on a plain runner.
+# Actions are pinned to the commit of a release (the comment names it): a moved tag cannot change what runs.
 name: checks
 
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
   tests:
+    name: Lint, tests, coverage and SonarQube analysis
     runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          fetch-depth: 0  # full history, for SonarQube's blame information
+          fetch-depth: 0  # full history: shallow clones make the analysis less relevant (blame, new code)
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.13"
           cache: pip
@@ -31,17 +36,20 @@ jobs:
       - name: Unit tests with coverage
         run: python -m pytest -q --cov=src/Project --cov-report=xml:coverage.xml --cov-report=term
 
-      # SonarQube Cloud: runs only once the repository has a SONAR_TOKEN secret; until then this step is skipped and the
-      # job still passes. Settings: sonar-project.properties. The project's Automatic Analysis must be off in SonarQube
-      # Cloud (Administration > Analysis Method), or this CI analysis is refused.
-      # v8 (v5 is no longer supported: GitHub's warning on the first run); v8 verifies the scanner's signature with gpg,
-      # which ubuntu-latest has. Current version:
-      # https://github.com/marketplace/actions/official-sonarqube-scan
+      # SonarQube Cloud: needs the SONAR_TOKEN secret (both steps are skipped without it) and Automatic Analysis turned
+      # off for the project (Administration > Analysis Method), or this CI analysis is refused. Organization, project
+      # key and the coverage report are in sonar-project.properties. v8 verifies the scanner's signature with gpg, which
+      # ubuntu-latest has; v5 is no longer supported.
+      - name: Cache SonarQube packages
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
       - name: SonarQube analysis
         if: ${{ env.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@v8
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4  # v8.5.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-    env:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

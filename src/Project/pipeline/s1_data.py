@@ -39,6 +39,17 @@ def show(value):
 #
 # Real-world results are expected to sit between A and B.
 #
+# **Which key defines a conflict for Track B: "headers".** Two segments conflict when their packets agree on every header
+# field except TTL and destination port, and also ignoring the inter-arrival time (IAT), yet carry different labels.
+# Those three fields are left out on purpose: their values come from the testbed, not from the attack (TTL: the sending
+# host's operating system and hop count; destination port: the services this testbed runs; IAT: this network's link
+# speed, load and capture host). A conflict that only they could resolve would be resolved by the testbed's identity, not
+# by what the attack does, which is the dependence this project measures with the model without them. The rule is also
+# the stricter one: it removes every conflict either model could face, and one Track B shared by both models keeps them
+# on the same rows, so their difference comes from their inputs alone. Its cost is measured below: how many dropped
+# segments TTL, destination port or IAT would have separated. A Track B judged per model (on each model's own key) is
+# left for future work.
+#
 # Mirai (another network) and ARP MitM (same network) are held out of every track.
 
 
@@ -46,9 +57,9 @@ def show(value):
 import numpy as np
 import pandas as pd
 
-from kitsune_lib import (CAPTURES, OOD_CAPTURES, L, SEED, DATA_DIR, TRACK_DIR, RESULT_DIR, load_data, save_json)
+from kitsune_lib import CAPTURES, KEYS, OOD_CAPTURES, L, DATA_DIR, TRACK_DIR, RESULT_DIR, load_data
 
-X, segments, y_all, lengths, prefix_header, prefix_timed = load_data()
+X, segments, y_all, lengths, prefix_header, prefix_all = load_data()
 
 # Flow of every segment, numbered as when the segments were built (captures in order, flows sorted by start time);
 # used to resample whole flows for confidence intervals, since segments of one flow are not independent
@@ -72,7 +83,9 @@ print(f"{len(segments):,} segments in {segments.groupby(['capture', 'flow']).ngr
 # distinct sequence, labels ignored, over all samples: below 1, copies can fall on both sides of a split, so leakage shows
 # up after it as the difference between the "all" and "unseen" views. **Conflicting sequences** carry both labels; they are
 # candidates for manual relabelling where the true label can be established, and the rest are genuinely ambiguous.
-# Two sequence keys: headers alone, and headers + inter-arrival times (the models' inputs).
+# Two sequence keys (kitsune_lib.packet_keys), each exactly the inputs of one model, labels never included: "headers"
+# (the model without TTL, destination port and IAT) and "all inputs" (headers + TTL + destination port + IAT, the
+# main model).
 
 
 # %%
@@ -86,10 +99,10 @@ def diagnostics(hashes, y):
 known = ~segments["capture"].isin(OOD_CAPTURES).to_numpy()
 report = pd.concat({
     key: pd.DataFrame([diagnostics(H[known, k - 1], y_all[known]) for k in range(1, L + 1)], index=range(1, L + 1))
-    for key, H in [("headers", prefix_header), ("headers + IAT", prefix_timed)]
+    for key, H in [("headers", prefix_header), ("all inputs", prefix_all)]
 }, names=["key", "k"])
 report.to_csv(RESULT_DIR / "diagnostics.csv")
-show(report.loc[(["headers", "headers + IAT"], [1, 2, 3, 5, 10, 20, 50]), :].round(4))
+show(report.loc[(["headers", "all inputs"], [1, 2, 3, 5, 10, 20, 50]), :].round(4))
 
 
 # %%
@@ -110,7 +123,7 @@ plt.rcParams.update({
 })
 
 fig, axes = plt.subplots(1, 2, figsize=(10, 4.2))
-for key, color in [("headers", BLUE), ("headers + IAT", ORANGE)]:
+for key, color in [("headers", BLUE), ("all inputs", ORANGE)]:
     g = report.loc[key]
     axes[0].plot(g.index, g["distinct share"], color=color, label=key)
     axes[1].plot(g.index, g["conflicting share of distinct"] * 100, color=color, label=key)
@@ -152,6 +165,17 @@ conflict_hashes = review.index
 in_conflict = in_dist["hash"].isin(conflict_hashes)
 tracks = {"A": in_dist, "B": in_dist[~in_conflict]}
 
+# The cost of judging conflicts on "headers": dropped segments that TTL, destination port or IAT would have separated
+# (not in conflict under "all inputs")
+by_all = in_dist.groupby("hash_all")["attack"].agg(["min", "max"])
+in_conflict_all = in_dist["hash_all"].isin(by_all.index[by_all["min"] != by_all["max"]])
+b_drops = pd.DataFrame([{"segments dropped from Track B": int(in_conflict.sum()),
+                         "of which also in conflict under all inputs": int((in_conflict & in_conflict_all).sum()),
+                         "of which TTL, destination port or IAT would separate": int((in_conflict & ~in_conflict_all).sum()),
+                         "known segments": len(in_dist)}])
+b_drops.to_csv(RESULT_DIR / "track_b_drops.csv", index=False)
+show(b_drops.T)
+
 
 def time_split(g):
     rank = (np.arange(len(g)) + 0.5) / len(g)
@@ -167,11 +191,12 @@ for name, t in tracks.items():
         assert s.max()["train"] <= s.min()["val"] and s.max()["val"] <= s.min()["test"]
     t[["segment", "capture", "flow", "attack", "length", "start", "hash", "split"]].to_parquet(TRACK_DIR / f"{name}.parquet", index=False)
     tracks[name] = t
-    train_h = set(t.loc[t["split"] == "train", "hash"])
+    train_h = {key: set(t.loc[t["split"] == "train", col]) for key, col in KEYS.items()}
     for part in ["train", "val", "test"]:
         d = t[t["split"] == part]
         summary.append({"track": name, "split": part, "segments": len(d), "attack share": d["attack"].mean(),
-                        "unseen rows": int((~d["hash"].isin(train_h)).sum()) if part != "train" else np.nan})
+                        **{("unseen rows" if key == "headers" else f"unseen rows, {key}"):
+                           int((~d[col].isin(train_h[key])).sum()) if part != "train" else np.nan for key, col in KEYS.items()}})
 assert not tracks["B"]["hash"].isin(conflict_hashes).any()
 summary = pd.DataFrame(summary).set_index(["track", "split"])
 summary.to_csv(RESULT_DIR / "track_sizes.csv")

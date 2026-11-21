@@ -12,13 +12,12 @@ the model without the testbed group.
     python run_all.py --tracks A       # one track
     python run_all.py --from 3         # start at stage 3 (earlier results are read from disk)
     python run_all.py --only 2 3       # just these stages
-    python run_all.py --quick DIR      # smoke test of stages 2-5 on a tiny subsample, results in DIR
     python run_all.py --yes (or -y)    # unattended: answer yes to the overwrite question
 
 Before the first step the run lists every existing file the selected steps rewrite (results tables, tracks, units,
 artifacts) with the consequences and asks yes or no; trained models and parsed data are caches and are never
 overwritten (see safeguard.py). On yes those files are copied to runs/backup/<time>/ first; if a step fails, its files
-are put back from that copy. --quick writes only to DIR and asks nothing.
+are put back from that copy.
 
 Order: 0 -> 1 -> 2 (per track) -> 3, 4 and 5 (per track, each needs only that track's stage 2) -> 6 (after 3) -> 7 and
 8 (Track A, after 3). With --jobs N, up to N steps whose inputs are ready run at once (the two tracks, and stages 3-5 of
@@ -112,34 +111,31 @@ def main():
     ap.add_argument("--from", dest="start", type=int, default=0, help="first stage to run")
     ap.add_argument("--only", nargs="+", type=int, choices=list(STAGES), help="run only these stages")
     ap.add_argument("--jobs", type=int, default=1, help="steps run at once (default 1)")
-    ap.add_argument("--quick", metavar="DIR", help="smoke test of stages 2-5: tiny subsample, one epoch, results in DIR")
     ap.add_argument("-y", "--yes", action="store_true", help="answer yes to the overwrite question (unattended runs)")
     args = ap.parse_args()
     keep_awake()
 
-    out_dir = Path(args.quick).resolve() if args.quick else ROOT / "runs"
-    logs = out_dir / "logs"
+    logs = ROOT / "runs" / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     times = logs / "run_all_times.csv"
+    first_line = (times.read_text(encoding="utf-8").splitlines() or [""])[0] if times.exists() else ""
+    if times.exists() and (",quick," in first_line or not first_line.startswith("step,")):
+        # Older log with a column this version no longer writes, or an empty or cut-off one (a run that stopped while
+        # writing it): kept as it is, a new log is started
+        times.rename(logs / f"run_all_times_before_{time.strftime('%Y%m%d_%H%M%S')}.csv")
     threads = str(max(1, (os.cpu_count() or 8) // args.jobs))
     env = {**os.environ, "MPLBACKEND": "Agg", "PYTHONIOENCODING": "utf-8", "OMP_NUM_THREADS": threads,
            "MKL_NUM_THREADS": threads}
-    if args.quick:
-        env["QUICK"] = str(out_dir)
     stages = args.only or [s for s in STAGES if s >= args.start]
-    if args.quick:
-        stages = [s for s in stages if s >= 2]
     steps, wait = plan(stages, args.tracks)
     globs = {name: safeguard.rewrites(STAGES[s][0], t) for name, s, t in steps}
-    backup = None
-    if not args.quick:
-        if not safeguard.confirm(safeguard.describe([(n, globs[n]) for n, _, _ in steps], ROOT), args.yes):
-            return 2
-        backup = safeguard.snapshot([g for gs in globs.values() for g in gs], ROOT)
-        if backup:
-            print(f"copy of the files to be rewritten: {backup}", flush=True)
+    if not safeguard.confirm(safeguard.describe([(n, globs[n]) for n, _, _ in steps], ROOT), args.yes):
+        return 2
+    backup = safeguard.snapshot([g for gs in globs.values() for g in gs], ROOT)
+    if backup:
+        print(f"copy of the files to be rewritten: {backup}", flush=True)
     print(f"{len(steps)} steps, {args.jobs} at a time, {threads} CPU threads each", flush=True)
-    record_environment(out_dir if args.quick else ROOT / "data" / "results", logs, env, args.jobs, threads)
+    record_environment(ROOT / "data" / "results", logs, env, args.jobs, threads)
 
     pending, running, done, failed = list(steps), {}, set(), []
     t_all = time.time()
@@ -165,8 +161,8 @@ def main():
             with open(times, "a", newline="") as f:
                 w = csv.writer(f)
                 if new:
-                    w.writerow(["step", "mode", "jobs", "threads", "quick", "started", "seconds", "status"])
-                w.writerow([name, "scripts", args.jobs, threads, bool(args.quick),
+                    w.writerow(["step", "mode", "jobs", "threads", "started", "seconds", "status"])
+                w.writerow([name, "scripts", args.jobs, threads,
                             time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t0)), round(seconds),
                             "ok" if ok else f"exit {proc.returncode}"])
             print(f"{time.strftime('%H:%M:%S')}  {'done' if ok else 'FAILED'} {name} in {seconds / 60:.1f} min "

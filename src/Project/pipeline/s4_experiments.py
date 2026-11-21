@@ -27,7 +27,8 @@ def show(value):
 #
 # Every experiment uses this track's own rows, cleaning rule, main model inputs and GRU size, and builds its deployable unit
 # the same way as stage 3 (temperatures, OOD detectors and limits and precision-target cut-offs from its own validation data).
-# All results are on test (or held-out) rows, in the "all" and "unseen" views.
+# All results are on test (or held-out) rows, in the "all" and "unseen" views ("unseen" on the key "all inputs", since
+# every model here reads the main model's inputs).
 #
 # 1. **Retraining on OOD abstentions**: does labelling what the classifier flagged teach it something?
 # 2. **Unseen sessions**: leave one capture out (7 runs), and train on February to May, test on August.
@@ -48,31 +49,23 @@ import torch
 from sklearn.model_selection import train_test_split
 
 import kitsune_lib as kl
-from kitsune_lib import (CAPTURES, GRU_GRID, L, OOD_CAPTURES, SEED, STEP_BUCKET, apply_track_rule, build_unit, cut_segments,
-                         decide, fit_gru, fit_stats, fit_temperatures, group_columns, known_metrics, load, load_data,
-                         load_json, p_attack, predict, read_track, real_steps, route, running_mean, split_index,
-                         time_split, tune_targets)
+from kitsune_lib import (CAPTURES, GRU_GRID, L, OOD_CAPTURES, SEED, build_unit, decide, fit_gru, fit_stats, group_columns,
+                         known_metrics, load, load_data, load_gru, load_json, model_key, p_attack, predict, read_track,
+                         route, rows_digest, split_index, time_split)
 
 TRACK = os.environ.get("TRACK", "A")
 OUT = kl.RESULT_DIR
-QUICK = os.environ.get("QUICK")
-if QUICK:
-    kl.MODEL_DIR = OUT = Path(QUICK)
-    kl.MAX_EPOCHS = 1
 HIDDEN_TRAIN = 30_000
 
-X, segments, y_all, lengths, prefix_header, _ = load_data()
-seg_hash = segments["hash"].to_numpy()
+X, segments, y_all, lengths, _, _ = load_data()
 track = read_track(TRACK).set_index("segment", drop=False)
 track["capture_order"] = track["capture"].map({c: i for i, c in enumerate(CAPTURES)})
 part = split_index(track)
 held = pd.read_parquet(kl.TRACK_DIR / "held_out.parquet").set_index("segment", drop=False)
-if QUICK:
-    part = {k: v[::max(1, len(v) // 3000)] for k, v in part.items()}
-    held = held.iloc[::max(1, len(held) // 3000)]
 selection = load_json(OUT / f"{TRACK}_selection.json")
 arch, groups = selection["arch"], selection["final"]["main"]
 cols = group_columns(groups)
+seg_hash = segments[kl.KEYS[model_key(groups)]].to_numpy()  # every model here reads the main inputs: key "all inputs"
 stats = fit_stats(X, part["train"])
 
 
@@ -95,7 +88,8 @@ def views(out, y, unseen_mask, packets=None):
 cal_idx, thr_idx = halves(part["val"], track)
 parts = {"train sample": np.sort(np.random.default_rng(SEED).choice(part["train"], min(HIDDEN_TRAIN, len(part["train"])), replace=False)),
          "cal": np.sort(cal_idx), "thr": np.sort(thr_idx), "test": part["test"], "held": held.index.to_numpy()}
-main_net, _ = fit_gru(selection["models"]["main"][0], np.zeros((1, 1, len(cols)), np.float32), np.zeros(1, np.float32), None, None, *GRU_GRID[arch])
+main_net = load_gru(selection["models"]["main"][0], len(cols), *GRU_GRID[arch],
+                    rows=rows_digest(TRACK, part["train"], part["val"], cols, stats, segments))
 u0 = build_unit(X, main_net, cols, stats, parts, lengths, y_all)
 test_unseen = ~np.isin(seg_hash[part["test"]], seg_hash[part["train"]])
 print(f"Track {TRACK}: size {arch}, inputs {groups}")
@@ -151,8 +145,6 @@ show(retraining[["segments", "failure rate", "High", "Low", "Medium", "OOD", "at
 known = [c for c in CAPTURES if c not in OOD_CAPTURES]
 SESSIONS = {f"without {c}": ([k for k in known if k != c], [c]) for c in known}
 SESSIONS["Feb-May to Aug"] = (["Video Injection", "SSDP Flood", "SYN DoS", "SSL Renegotiation"], ["OS Scan", "Fuzzing", "Active Wiretap"])
-if QUICK:
-    SESSIONS = dict(list(SESSIONS.items())[:1])
 rows = []
 for run, (train_caps, test_caps) in SESSIONS.items():
     t0 = time.time()
@@ -161,8 +153,6 @@ for run, (train_caps, test_caps) in SESSIONS.items():
     tr = np.sort(pool.loc[pool["split"] == "train", "segment"].to_numpy())
     va = np.sort(pool.loc[pool["split"] == "val", "segment"].to_numpy())
     te = np.sort(track.loc[track["capture"].isin(test_caps), "segment"].to_numpy())
-    if QUICK:
-        tr, va, te = tr[::50], va[::50], te[::50]
     st = fit_stats(X, tr)
     tag = "".join(ch for ch in run if ch.isalnum())
     net, _ = fit_gru(f"{TRACK}_{arch}_session_{tag}", load(X, tr, st, cols), y_all[tr].astype(np.float32),
@@ -192,8 +182,6 @@ show(sessions[["segments", "coverage", "attacks blocked", "block precision", "at
 # %%
 start_of_test = track.loc[part["test"]].groupby("capture")["start"].min()
 stream = track[track["start"] >= track["capture"].map(start_of_test)].sort_values(["capture", "flow", "start"], kind="stable").reset_index(drop=True)
-if QUICK:
-    stream = stream.iloc[:3000]
 stream["flow_key"] = stream.groupby(["capture", "flow"], sort=False).ngroup()
 stream["round"] = stream.groupby("flow_key").cumcount()
 x_s = load(X, stream["segment"].to_numpy(), stats, cols)

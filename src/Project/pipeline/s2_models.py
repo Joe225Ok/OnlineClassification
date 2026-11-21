@@ -34,46 +34,45 @@ def show(value):
 #    the attacked service; IAT: this network's link speed, load and capture host), so comparing the two models shows how
 #    much of the performance depends on them.
 #
-# Losses are shown on all validation rows and on the unseen ones (sequence not in training).
+# Losses are shown on all validation rows and on the unseen ones (sequence not in training, judged on the model's own key:
+# "all inputs" for models on every feature group, "headers" for the model without TTL, destination port and IAT).
 
 
 # %%
 import os
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-import kitsune_lib
-from kitsune_lib import (GROUPS, GRU_GRID, RESULT_DIR, SEED, TESTBED_GROUPS, eval_loss, fit_gru,
-                         group_columns, load, load_data, read_track, save_json, split_index, fit_stats, unseen)
+from kitsune_lib import (GROUPS, GRU_GRID, KEYS, RESULT_DIR, SEED, TESTBED_GROUPS, eval_loss, fit_gru, group_columns,
+                         load, load_data, model_key, read_track, rows_digest, save_json, split_index, fit_stats, unseen)
 
 TRACK = os.environ.get("TRACK", "A")
 SEEDS = [SEED]  # more seeds left for future work
 
 X, segments, y_all, lengths, prefix_header, _ = load_data()
 part = split_index(read_track(TRACK))
-if os.environ.get("QUICK"):  # smoke test: tiny subsample, one epoch, scratch folders
-    part = {k: v[::max(1, len(v) // 2000)] for k, v in part.items()}
-    kitsune_lib.MAX_EPOCHS = 1
-    kitsune_lib.MODEL_DIR = RESULT_DIR = Path(os.environ["QUICK"])
 stats = fit_stats(X, part["train"])
 x_train_all = load(X, part["train"], stats)
 x_val_all = load(X, part["val"], stats)
 y_train = y_all[part["train"]].astype(np.float32)
 y_val = y_all[part["val"]].astype(np.float32)
-val_unseen = unseen(part["val"], part["train"], segments["hash"].to_numpy())
+# Unseen validation rows under each key; each model is read on its own key (kitsune_lib.model_key)
+val_unseen = {key: unseen(part["val"], part["train"], segments[col].to_numpy()) for key, col in KEYS.items()}
 weight = float((y_train == 0).sum() / (y_train == 1).sum())
-print(f"Track {TRACK}: train {len(y_train):,}, validation {len(y_val):,} ({val_unseen.mean():.1%} unseen)")
+print(f"Track {TRACK}: train {len(y_train):,}, validation {len(y_val):,}, unseen: "
+      + ", ".join(f"{m.mean():.1%} ({key})" for key, m in val_unseen.items()))
 
 
 def train(name, groups, arch, seed=SEED):
     cols = group_columns(groups)
     model, loss_all = fit_gru(f"{TRACK}_{name}", x_train_all[:, :, cols], y_train, x_val_all[:, :, cols], y_val,
-                              *GRU_GRID[arch], seed=seed)
-    loss_unseen = eval_loss(model, x_val_all[val_unseen][:, :, cols], y_val[val_unseen], weight, len(cols) - 1)
-    return {"model": f"{TRACK}_{name}", "validation loss, all": loss_all, "validation loss, unseen": loss_unseen}
+                              *GRU_GRID[arch], seed=seed,
+                              rows=rows_digest(TRACK, part["train"], part["val"], cols, stats, segments))
+    m = val_unseen[model_key(groups)]
+    loss_unseen = eval_loss(model, x_val_all[m][:, :, cols], y_val[m], weight, len(cols) - 1)
+    return {"model": f"{TRACK}_{name}", "validation loss, all": loss_all, "validation loss, unseen": loss_unseen,
+            "key": model_key(groups)}
 
 
 # %% [markdown]

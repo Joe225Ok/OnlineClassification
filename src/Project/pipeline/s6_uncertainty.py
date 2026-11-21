@@ -64,10 +64,6 @@ from kitsune_lib import (BUCKETS, GRU_GRID, K_REPORT, L, SEED, STEP_BUCKET, at_p
 TRACK = os.environ.get("TRACK", "A")
 ROLE = os.environ.get("ROLE", "no_testbed")
 OUT = kl.RESULT_DIR
-QUICK = os.environ.get("QUICK")
-if QUICK:  # smoke test: small parts, one epoch, results kept apart
-    kl.MODEL_DIR = OUT = Path(QUICK)
-    kl.MAX_EPOCHS = 1
 P_DROP, PASSES = 0.2, 20
 HIDDEN_TRAIN = 30_000
 ROLES = {"main": "main", "no_testbed": "without TTL, destination port and IAT"}
@@ -76,11 +72,6 @@ X, segments, y_all, lengths, _, _ = load_data()
 track = read_track(TRACK).set_index("segment", drop=False)
 part = split_index(track)
 held = pd.read_parquet(kl.TRACK_DIR / "held_out.parquet").set_index("segment", drop=False)
-if QUICK:
-    part = {k: v[::max(1, len(v) // 3000)] for k, v in part.items()}
-    held = held.iloc[::max(1, len(held) // 3000)]
-seg_hash = segments["hash"].to_numpy()
-train_hashes = seg_hash[part["train"]]
 selection = load_json(OUT / f"{TRACK}_selection.json")
 arch = selection["arch"]
 groups = selection["final"][ROLES[ROLE]]
@@ -96,7 +87,8 @@ cal_idx, thr_idx = train_test_split(part["val"], test_size=0.5, random_state=SEE
                                     stratify=strata if pd.Series(strata).value_counts().min() >= 2 else None)
 parts = {"train sample": np.sort(np.random.default_rng(SEED).choice(part["train"], min(HIDDEN_TRAIN, len(part["train"])), replace=False)),
          "cal": np.sort(cal_idx), "thr": np.sort(thr_idx), "test": part["test"], "held": held.index.to_numpy()}
-unseen_of = {p: ~np.isin(seg_hash[i], train_hashes) for p, i in parts.items()}
+seg_hash = segments[kl.KEYS[kl.model_key(groups)]].to_numpy()  # "unseen" on this model's own key
+unseen_of = {p: ~np.isin(seg_hash[i], seg_hash[part["train"]]) for p, i in parts.items()}
 group_of = held.loc[parts["held"], "group"].to_numpy()
 
 
@@ -118,11 +110,11 @@ class DropoutGRU(kl.OnlineGRU):
         return self.head(self.drop(h)).squeeze(-1), h
 
 
-kl.OnlineGRU = DropoutGRU  # fit_gru builds this class, in this process only
 stats = fit_stats(X, part["train"])
 t0 = time.time()
 net, _ = fit_gru(f"{TRACK}_{arch}_{ROLE}_mc_dropout", load(X, part["train"], stats, cols), y_all[part["train"]].astype(np.float32),
-                 load(X, part["val"], stats, cols), y_all[part["val"]].astype(np.float32), *GRU_GRID[arch])
+                 load(X, part["val"], stats, cols), y_all[part["val"]].astype(np.float32), *GRU_GRID[arch],
+                 model_class=DropoutGRU)
 print(f"trained or loaded in {time.time() - t0:.0f}s")
 
 # Deterministic unit of this model (dropout off): OOD detectors and limits, temperatures, cut-offs

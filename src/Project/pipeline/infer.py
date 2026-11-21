@@ -12,9 +12,9 @@ and index columns are allowed; the last column is used). Output: one row per seg
 import argparse
 import gzip
 import io
-import os
 import sys
 import time
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -45,10 +45,23 @@ def read_labels(path):
 
 
 def load_artifact(folder):
+    """The model, its unit and its config from one artifact folder. Stops unless the three belong together (the unit and
+    the config name the hash of these weights); warns when a library differs from the versions it was exported with."""
+    import sklearn
     saved = torch.load(folder / "model.pt")
     net = kl.OnlineGRU(saved["n_inputs"], saved["hidden"], saved["layers"])
     net.load_state_dict(saved["state"])
-    return net.eval(), joblib.load(folder / "unit.joblib"), kl.load_json(folder / "config.json")
+    unit, config = joblib.load(folder / "unit.joblib"), kl.load_json(folder / "config.json")
+    kl.check_unit(unit, saved["state"], folder / "unit.joblib")
+    if config.get("model weights") != unit["model weights"]:
+        raise RuntimeError(f"{folder / 'config.json'} describes other model weights than model.pt and unit.joblib")
+    now = {"torch": torch.__version__, "scikit-learn": sklearn.__version__, "numpy": np.__version__}
+    for lib, version in now.items():
+        if config["versions"].get(lib) != version:
+            warnings.warn(f"{lib} {version} differs from {config['versions'].get(lib)}, the version this model was "
+                          f"exported with; its answers may differ (the unit holds a scikit-learn Isolation Forest)",
+                          stacklevel=2)
+    return net.eval(), unit, config
 
 
 def classify(x, n, net, unit, K):

@@ -17,9 +17,9 @@ from pathlib import Path
 # Files each stage rewrites, as globs relative to the project folder; {T} is the track. Caches written only when
 # missing are deliberately absent. Appended logs (training_times.csv, run_times.csv) are not listed either.
 REWRITES = {
-    "s0_prepare": ["data/flows_vs_segments.csv"],
+    "s0_prepare": ["data/flows_vs_segments.csv", "data/results/iat_resolution.csv"],
     "s1_data": ["data/tracks/*.parquet", "data/results/diagnostics.csv", "data/results/conflicts_for_review.csv",
-                "data/results/track_sizes.csv", "data/figures/data_diagnostics.png"],
+                "data/results/track_sizes.csv", "data/results/track_b_drops.csv", "data/figures/data_diagnostics.png"],
     "s2_models": ["data/results/{T}_gru_size.csv", "data/results/{T}_final_models.csv", "data/results/{T}_selection.json"],
     "s3_evaluate": ["data/models_v2/{T}_*_unit.joblib"] + [f"data/results/{{T}}_{n}" for n in (
         "thresholds.csv", "pipeline.csv", "bootstrap.csv", "per_attack_type.csv", "drift.csv", "decision_time.csv",

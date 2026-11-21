@@ -29,10 +29,15 @@ def show(value):
 # to carry its hidden state from one segment of a flow to the next; gradients stop at each segment boundary, and a new flow
 # starts empty. The **reset** model is this track's main model (stage 2): same inputs, size, data and loss, without memory.
 #
-# - **Chains**: every known segment in flow order, so memory is never broken by a missing segment. For Track B, conflicting
-#   segments pass memory along but never count in the loss or the scores.
-# - **Training**: the track's training segments, each starting from the saved state of the previous training segment of its
-#   flow. Early stopping on the validation segments, read in flow order with memory carried through training and validation.
+# - **Chains**: every known segment in flow order. When reading (validation, test), memory is never broken by a missing
+#   segment: for Track B, conflicting segments pass memory along but never count in the scores.
+# - **Training**: the track's training segments only (for Track B, conflicting segments are skipped, so memory passes from
+#   the previous training segment of the flow). At the start of every epoch one pass in flow order, without training,
+#   computes the state each training segment starts from with the current weights (zeros only at a flow's start); the
+#   epoch then trains on shuffled batches from those states. Shuffling keeps batches mixed across captures and classes,
+#   since some attacks appear only late in a capture; the price is that a starting state is up to one epoch old (computed
+#   with the weights at the epoch's start). Early stopping on the validation segments, read in flow order with memory
+#   carried through training and validation.
 # - **Reading**: on validation and test, memory runs through every earlier segment of the flow, as it would in deployment.
 # - **Decisions**: temperatures on the first validation half, precision-target cut-offs on the second, OOD gate off for
 #   both models so that only memory differs. Results on validation and test, in the "all" and "unseen" views, plus whole flows.
@@ -50,19 +55,15 @@ from sklearn.model_selection import train_test_split
 from torch import nn as tnn
 
 import kitsune_lib as kl
-from kitsune_lib import (BATCH, CAPTURES, GRU_GRID, K_REPORT, L, MAX_EPOCHS, PATIENCE, SEED, OnlineGRU, ceiling, fit_gru,
-                         fit_stats, fit_temperatures, group_columns, known_metrics, load, load_data, load_json, p_attack,
-                         read_track, real_steps, route, scores, at_prefix, tune_targets)
+from kitsune_lib import (BATCH, GRU_GRID, K_REPORT, L, MAX_EPOCHS, PATIENCE, SEED, OnlineGRU, ceiling,
+                         fit_stats, fit_temperatures, group_columns, known_metrics, load, load_data, load_gru, load_json, p_attack,
+                         read_track, real_steps, route, rows_digest, scores, at_prefix, tune_targets)
 
 TRACK = os.environ.get("TRACK", "A")
 OUT = kl.RESULT_DIR
-QUICK = os.environ.get("QUICK")
-if QUICK:
-    kl.MODEL_DIR = OUT = Path(QUICK)
-    MAX_EPOCHS = 1
 
-X, segments, y_all, lengths, _, _ = load_data()
-seg_hash = segments["hash"].to_numpy()
+X, segments, y_all, lengths, _, prefix_all = load_data()
+seg_hash = segments["hash_all"].to_numpy()  # both models read the main inputs: "unseen" on the key "all inputs"
 selection = load_json(OUT / f"{TRACK}_selection.json")
 arch, groups = selection["arch"], selection["final"]["main"]
 cols = group_columns(groups)
@@ -73,9 +74,6 @@ mask_at = len(cols) - 1
 chain = read_track("A").drop(columns="split").merge(read_track(TRACK)[["segment", "split"]], on="segment", how="left")
 chain["split"] = chain["split"].fillna("not in track")
 chain = chain.sort_values(["capture", "flow", "start"], kind="stable").reset_index(drop=True)
-if QUICK:
-    keep_flows = chain.groupby(["capture", "flow"]).ngroup() % 100 == 0
-    chain = chain[keep_flows].reset_index(drop=True)
 chain["flow_key"] = chain.groupby(["capture", "flow"], sort=False).ngroup()
 split = chain["split"].to_numpy()
 seg = chain["segment"].to_numpy()
@@ -95,13 +93,6 @@ print(f"Track {TRACK}: {len(chain):,} chained segments in {chain['flow_key'].nun
 
 
 # %%
-def previous_in(rows):
-    """For each of `rows` (in chain order), the position in `rows` of the previous one of its flow, or len(rows)."""
-    prev = np.r_[len(rows), np.arange(len(rows) - 1)]
-    prev[np.r_[True, keys[rows][1:] != keys[rows][:-1]]] = len(rows)
-    return prev
-
-
 @torch.no_grad()
 def read_flows(net, rows, carry=True):
     """Logits of `rows` (in chain order), each segment starting from the state its flow's previous row left."""
@@ -131,24 +122,28 @@ def train_stateful(name):
     path = kl.MODEL_DIR / f"{name}.pt"
     torch.manual_seed(SEED)
     net = OnlineGRU(len(cols), hidden, layers)
+    # The chains (inputs, labels, lengths, flows) and which of their rows train and validate
+    fingerprint = kl.training_fingerprint(OnlineGRU, len(cols), hidden, layers, SEED,
+                                          kl.digest(x, y, n, keys, split == "train", split == "val"))  # + TRAINING_VERSION
     if path.exists():
-        net.load_state_dict(torch.load(path)["state"])
+        saved = torch.load(path)
+        kl.check_fingerprint(saved.get("fingerprint"), fingerprint, path)
+        net.load_state_dict(saved["state"])
         return net
-    prev = previous_in(train_rows)
-    store = torch.zeros(layers, len(train_rows) + 1, hidden)  # last column stays zero: the start of a flow
     read_rows = np.flatnonzero(np.isin(split, ["train", "val"]))  # validation read after its flow's training segments
     val_at = split[read_rows] == "val"
-    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(net.parameters(), lr=kl.LR)
     rng = np.random.default_rng(SEED)
     best, best_state, stale, t0 = np.inf, None, 0, time.time()
     for epoch in range(MAX_EPOCHS):
+        # Where every training segment starts, with this epoch's weights: one pass in flow order, no training
+        start = kl.chain_start_states(net.gru, x, train_rows, keys[train_rows], layers, hidden)
         net.train()
         for b in np.array_split(rng.permutation(len(train_rows)), len(train_rows) // BATCH + 1):
             rows = train_rows[b]
             steps = int(n[rows].max())
             xb, yb = torch.from_numpy(x[rows, :steps]), torch.from_numpy(y[rows].astype(np.float32))
-            o, last = net.gru(xb, store[:, prev[b]])
-            store[:, b] = last.detach()
+            o, _ = net.gru(xb, start[:, b])
             logits = net.head(o).squeeze(-1)
             w = xb[:, :, mask_at] * (1 + (weight - 1) * yb.unsqueeze(1))
             loss = (tnn.functional.binary_cross_entropy_with_logits(logits, (1 - yb).unsqueeze(1).expand_as(logits),
@@ -168,7 +163,8 @@ def train_stateful(name):
                 break
     net.load_state_dict(best_state)
     seconds = time.time() - t0
-    torch.save({"state": best_state, "val_loss": best, "weight": weight, "epochs": epoch + 1, "seconds": seconds}, path)
+    torch.save({"state": best_state, "val_loss": best, "weight": weight, "epochs": epoch + 1, "seconds": seconds,
+                "fingerprint": fingerprint}, path)
     times = kl.MODEL_DIR / "training_times.csv"
     pd.DataFrame([{"model": name, "finished": time.strftime("%Y-%m-%d %H:%M:%S"), "epochs": epoch + 1, "seconds": round(seconds),
                    "training segments": len(train_rows), "hidden": hidden, "layers": layers}]
@@ -177,8 +173,8 @@ def train_stateful(name):
 
 
 stateful = train_stateful(f"{TRACK}_{arch}_stateful")
-main_net, _ = fit_gru(selection["models"]["main"][0], np.zeros((1, 1, len(cols)), np.float32), np.zeros(1, np.float32),
-                      None, None, hidden, layers)
+main_net = load_gru(selection["models"]["main"][0], len(cols), hidden, layers,
+                    rows=rows_digest(TRACK, np.sort(seg[train_rows]), np.sort(seg[split == "val"]), cols, stats, segments))
 
 
 # %% [markdown]
@@ -211,7 +207,10 @@ for mode, net, carry in [("reset", main_net, False), ("carried", stateful, True)
             r = rows[m]
             for k in [1, 5, 20, 50]:
                 pred = (at_prefix(z_all[r], n[r], k) < 0).astype(int)
-                c = ceiling(seg_hash[seg[r]], y[r])
+                # Ceiling on the same rows at the same prefix k, key "all inputs" (the main model's inputs): an upper
+                # bound for the reset model; a reference value for the carried model, which also reads the flow's
+                # earlier segments and so can score above it.
+                c = ceiling(prefix_all[seg[r], k - 1], y[r])
                 forced.append({"memory": mode, "split": part_name, "view": view, "k": k, **scores(y[r], pred),
                                "MaxAcc (same rows)": c["MaxAcc"], "MaxF1 (same rows)": c["MaxF1"]})
     for K in K_REPORT:

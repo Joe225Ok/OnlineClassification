@@ -59,7 +59,6 @@ def show(value):
 
 # %%
 import gzip
-import json
 import time
 import zipfile
 from pathlib import Path
@@ -67,6 +66,9 @@ from pathlib import Path
 import dpkt
 import numpy as np
 import pandas as pd
+
+import kitsune_lib
+from kitsune_lib import CAPTURES, COL, COLUMNS, L, OOD_CAPTURES, SEED  # noqa: F401  (used further down)
 
 # 9 attack folders, each with <Attack>_pcap, _labels and _dataset (unused). 19 GB zipped.
 DATA_DIR = Path("data")
@@ -140,25 +142,10 @@ print(f"  {'payload':<9}{len(layer)} bytes: {layer!r}")
 
 
 # %%
-# Proposal Table 1: capture -> folder and role
-CAPTURES = {
-    "OS Scan": "os_scan", "Fuzzing": "fuzzing",
-    "Video Injection": "video_injection", "Active Wiretap": "active_wiretap",
-    "SSDP Flood": "ssdp_flood", "SYN DoS": "syn_dos", "SSL Renegotiation": "ssl_renegotiation",
-    "ARP MitM": "arp_mitm", "Mirai": "mirai",  # OOD test only
-}
-OOD_CAPTURES = ["ARP MitM", "Mirai"]
-L = 50    # packets kept per sample
-SEED = 0  # passed to every random step
-
+# Proposal Table 1: capture -> folder and role (kitsune_lib.CAPTURES); ARP MitM and Mirai are held out
+# (kitsune_lib.OOD_CAPTURES). Segments of L = 50 packets; SEED = 0 for every random step.
 PACKET_DIR = DATA_DIR / "packets"
 PACKET_DIR.mkdir(exist_ok=True)
-PACKET_DTYPE = np.dtype([
-    ("ts", "f8"), ("flow", "u4"), ("direction", "u1"), ("frame_len", "u4"), ("ethertype", "u2"),
-    ("ip_proto", "u1"), ("ttl", "u1"), ("ip_hlen", "u1"), ("l4_hlen", "u1"), ("tcp_flags", "u1"),
-    ("tcp_window", "u2"), ("udp_len", "u2"), ("icmp_type", "u1"), ("icmp_code", "u1"),
-    ("arp_op", "u2"), ("dst_port", "u2"),
-])
 
 
 def member(capture, suffix):
@@ -172,57 +159,13 @@ def read_labels(capture):
     return pd.to_numeric(labels, errors="coerce").dropna().to_numpy(dtype=np.int8)
 
 
-def open_reader(stream):
-    # Extensions lie: Mirai_pcap.pcap.gz is really pcapng, so go by the magic number.
-    return dpkt.pcapng.Reader(stream) if stream.peek(4)[:4] == b"\n\r\r\n" else dpkt.pcap.Reader(stream)
-
-
 def parse_capture(capture):
-    """One row per packet, in file order so it lines up with the labels file.
-    IPs, MACs and ports only assign the flow id; they are not stored."""
+    """One row per packet, in file order so it lines up with the labels file, parsed by kitsune_lib.parse_pcap (the
+    parser infer.py uses for new captures)."""
     labels = read_labels(capture)
-    packets = np.zeros(len(labels), dtype=PACKET_DTYPE)
-    flows = {}  # canonical key -> (flow id, endpoint that sent the first packet)
     with archive.open(member(capture, "_pcap")) as f, gzip.open(f) as g:
-        i = -1
-        for i, (ts, buf) in enumerate(open_reader(g)):
-            frame_len, proto, ttl, ip_hlen, l4_hlen, flags, window, udp_len = len(buf), 0, 0, 0, 0, 0, 0, 0
-            icmp_type, icmp_code, arp_op, sport, dport, ethertype = 0, 0, 0, 0, 0, 0
-            src, dst = b"", b""
-            try:
-                eth = dpkt.ethernet.Ethernet(buf)
-            except dpkt.UnpackError:
-                eth = None
-            if eth is not None:
-                ethertype = eth.type if eth.type >= 0x600 else 0  # below 0x600 it is an 802.3 length
-                ip = eth.data
-                if isinstance(ip, (dpkt.ip.IP, dpkt.ip6.IP6)):
-                    src, dst, proto = ip.src, ip.dst, ip.p
-                    if isinstance(ip, dpkt.ip.IP):
-                        ttl, ip_hlen = ip.ttl, ip.hl * 4
-                        frame_len = (ip.len + 14) if ip.len else frame_len  # captures cut frames to 200 bytes
-                    else:
-                        ttl, ip_hlen = ip.hlim, 40
-                        frame_len = ip.plen + 54
-                    l4 = ip.data
-                    if isinstance(l4, dpkt.tcp.TCP):
-                        sport, dport, flags, window, l4_hlen = l4.sport, l4.dport, l4.flags, l4.win, l4.off * 4
-                    elif isinstance(l4, dpkt.udp.UDP):
-                        sport, dport, udp_len, l4_hlen = l4.sport, l4.dport, l4.ulen, 8
-                    elif isinstance(l4, (dpkt.icmp.ICMP, dpkt.icmp6.ICMP6)):
-                        icmp_type, icmp_code, l4_hlen = l4.type, l4.code, 8
-                else:
-                    src, dst = eth.src, eth.dst
-                    if isinstance(ip, dpkt.arp.ARP):
-                        arp_op = ip.op
-            a, b = (src, sport), (dst, dport)
-            key = (a, b, proto, ethertype) if a <= b else (b, a, proto, ethertype)
-            flow_id, first_sender = flows.setdefault(key, (len(flows), a))
-            if i < len(labels):
-                packets[i] = (ts, flow_id, a != first_sender, frame_len, ethertype, proto, ttl, ip_hlen, l4_hlen,
-                              flags, window, udp_len, icmp_type, icmp_code, arp_op, dport)
-    assert i + 1 == len(labels), f"{capture}: {i + 1:,} packets but {len(labels):,} labels"
-    out = pd.DataFrame(packets)
+        out = kitsune_lib.parse_pcap(g)
+    assert len(out) == len(labels), f"{capture}: {len(out):,} packets but {len(labels):,} labels"
     out["label"] = labels
     return out
 
@@ -307,62 +250,36 @@ show(comparison)
 
 
 # %%
-# Per-packet inputs. Continuous columns are log-scaled here and standardized with training statistics later.
-CONTINUOUS = ["frame_len", "tcp_window", "ip_hlen", "l4_hlen", "iat"]
-BINARY = ["direction", "tcp", "udp", "icmp", "arp_request", "arp_reply", "other_ip", "ipv6",
-          "fin", "syn", "rst", "psh", "ack", "urg", "ece", "cwr", "mask"]
-EXTRA = ["ttl", "dst_port"]  # inputs of the main model; removed with IAT in the testbed comparison
-COLUMNS = CONTINUOUS + BINARY + EXTRA
-COL = {c: i for i, c in enumerate(COLUMNS)}
-# What makes two packets "the same". IAT is left out: at microsecond resolution almost no two
-# gaps are equal, so it would hide copies that differ only in timing jitter. Stage 1 shows both.
-HEADER_KEY = ["direction", "frame_len", "protocol", "tcp_flags", "tcp_window", "ip_hlen", "l4_hlen", "arp_op", "is_ipv6"]
-
-
-def packet_features(p, pos):
-    """Input matrix for packets of one capture, already ordered by flow and time."""
-    iat = p["ts"].diff().where(pos != 0, 0).fillna(0).clip(lower=0).to_numpy()
-    x = np.zeros((len(p), len(COLUMNS)), dtype=np.float32)
-    x[:, COL["frame_len"]] = np.log1p(p["frame_len"])
-    x[:, COL["tcp_window"]] = np.log1p(p["tcp_window"])
-    x[:, COL["ip_hlen"]] = p["ip_hlen"]
-    x[:, COL["l4_hlen"]] = p["l4_hlen"]
-    x[:, COL["iat"]] = np.log1p(iat * 1e6)  # microseconds
-    x[:, COL["direction"]] = p["direction"]
-    x[:, COL["tcp"]] = p["protocol"] == 1
-    x[:, COL["udp"]] = p["protocol"] == 2
-    x[:, COL["icmp"]] = p["protocol"] == 3
-    x[:, COL["arp_request"]] = p["arp_op"] == 1
-    x[:, COL["arp_reply"]] = p["arp_op"] == 2
-    x[:, COL["other_ip"]] = p["protocol"] == 5
-    x[:, COL["ipv6"]] = p["is_ipv6"]
-    for bit, name in enumerate(["fin", "syn", "rst", "psh", "ack", "urg", "ece", "cwr"]):
-        x[:, COL[name]] = (p["tcp_flags"].to_numpy() >> bit) & 1
-    x[:, COL["mask"]] = 1
-    x[:, COL["ttl"]] = p["ttl"]
-    x[:, COL["dst_port"]] = np.log1p(p["dst_port"])
-    return x, np.rint(iat * 1e6).astype(np.int64)
+# Per-packet inputs: kitsune_lib.COLUMNS (sizes, header lengths, TCP flags and window, protocol, direction, IAT, TTL,
+# destination port, and the mask of real packets), built by kitsune_lib.packet_features, the same function infer.py
+# uses. Continuous columns are log-scaled there and standardized with training statistics later.
+# What makes two packets "the same": two keys, each holding exactly what one model reads (kitsune_lib.packet_keys).
+# "headers": every header field except TTL and destination port (the model without TTL, destination port and IAT).
+# "all inputs": the same plus TTL, destination port and the IAT in whole microseconds (the main model). The label is
+# never part of a key. Stage 1 reports duplicates and conflicts under both.
 
 
 SEQ_FILE, SEG_FILE, HASH_FILE = DATA_DIR / "sequences.npy", DATA_DIR / "segments.parquet", DATA_DIR / "packet_hashes.npz"
-if not (SEQ_FILE.exists() and SEG_FILE.exists() and HASH_FILE.exists()):
+PREFIX_FILE = DATA_DIR / "prefix_hashes.npz"
+if not all(f.exists() for f in (SEQ_FILE, SEG_FILE, HASH_FILE, PREFIX_FILE)):
     t0 = time.time()
     n_total = int(comparison["segments"].sum())
     X_out = np.lib.format.open_memmap(SEQ_FILE, mode="w+", dtype=np.float32, shape=(n_total, L, len(COLUMNS)))
-    H_header, H_timed = np.zeros((n_total, L), np.uint64), np.zeros((n_total, L), np.uint64)
-    meta, offset = [], 0
+    H_header, H_all = np.zeros((n_total, L), np.uint64), np.zeros((n_total, L), np.uint64)
+    meta, offset, iat_rows = [], 0, []
     for capture, folder in CAPTURES.items():
         p = pd.read_parquet(PACKET_DIR / f"{folder}.parquet").sort_values(["flow", "ts"], kind="stable").reset_index(drop=True)
-        seq = p.groupby("flow").cumcount().to_numpy()
-        pos = seq % L
-        seg = np.cumsum(pos == 0) - 1 + offset
-        p["protocol"] = np.select([p["ip_proto"] == 6, p["ip_proto"] == 17, p["ip_proto"].isin([1, 58]),
-                                   p["ethertype"] == 0x806, p["ip_proto"] > 0], [1, 2, 3, 4, 5], 0)
-        p["is_ipv6"] = (p["ethertype"] == 0x86DD).astype(np.int8)
-        x, iat_us = packet_features(p, pos)
-        X_out[seg, pos] = x
-        H_header[seg, pos] = pd.util.hash_pandas_object(p[HEADER_KEY], index=False).to_numpy()
-        H_timed[seg, pos] = pd.util.hash_pandas_object(p[HEADER_KEY].assign(iat=iat_us), index=False).to_numpy()
+        pos, seg = kitsune_lib.flow_positions(p, L)
+        seg = seg + offset
+        kitsune_lib.add_protocol(p)
+        gap_us = kitsune_lib.packet_iat(p, pos) * 1e6
+        iat_us = np.rint(gap_us).astype(np.int64)
+        X_out[seg, pos] = kitsune_lib.packet_features(p, pos)
+        H_header[seg, pos], H_all[seg, pos] = kitsune_lib.packet_keys(p, iat_us)
+        # The "all inputs" key holds the IAT in whole microseconds; the model reads the exact gap. Record how many gaps
+        # are not whole microseconds, i.e. where the key is coarser than what the model reads.
+        iat_rows.append({"capture": capture, "packets": len(p),
+                         "gaps not whole microseconds": int((np.abs(gap_us - np.rint(gap_us)) > 1e-3).sum())})
         m = pd.DataFrame({"segment": seg, "label": p["label"], "ts": p["ts"], "is_arp": p["ethertype"] == 0x806})
         m = m.groupby("segment").agg(attack=("label", "max"), malicious=("label", "sum"), length=("label", "size"),
                                      start=("ts", "min"), arp_share=("is_arp", "mean")).reset_index()
@@ -374,12 +291,13 @@ if not (SEQ_FILE.exists() and SEG_FILE.exists() and HASH_FILE.exists()):
     X_out.flush()
     del X_out
     pd.concat(meta, ignore_index=True).to_parquet(SEG_FILE, index=False)
-    np.savez(HASH_FILE, header=H_header, timed=H_timed)
+    np.savez(HASH_FILE, header=H_header, all_inputs=H_all)
+    lengths = pd.concat(meta, ignore_index=True)["length"].to_numpy()
+    np.savez(PREFIX_FILE, header=kitsune_lib.prefix_hashes(H_header, lengths), all_inputs=kitsune_lib.prefix_hashes(H_all, lengths))
+    pd.DataFrame(iat_rows).set_index("capture").to_csv(kitsune_lib.RESULT_DIR / "iat_resolution.csv")
 
 X = np.load(SEQ_FILE, mmap_mode="r")  # segments x L x columns, zero-padded after the last packet
 segments = pd.read_parquet(SEG_FILE)
-_hashes = np.load(HASH_FILE)
-H_header, H_timed = _hashes["header"], _hashes["timed"]
 print(f"\n{X.shape[0]:,} segments, {X.shape[2]} columns, {X.nbytes / 1e9:.1f} GB")
 show(segments.groupby("capture", sort=False).agg(segments=("attack", "size"), attack=("attack", "sum"), median_length=("length", "median")))
 

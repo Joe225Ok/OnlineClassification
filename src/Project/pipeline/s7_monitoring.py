@@ -53,16 +53,13 @@ import numpy as np
 import pandas as pd
 
 import kitsune_lib as kl
-from kitsune_lib import COLUMNS, GRU_GRID, L, MASK_IDX, SEED, at_prefix, fit_gru, load, load_data, load_json, p_attack, predict, read_track, route, split_index
+from kitsune_lib import COLUMNS, GRU_GRID, L, MASK_IDX, SEED, at_prefix, load, load_data, load_gru, load_json, p_attack, predict, psi, read_track, route, split_index
 
 TRACK = os.environ.get("TRACK", "A")
 ROLE = os.environ.get("ROLE", "no_testbed")
 OUT = kl.RESULT_DIR
-QUICK = os.environ.get("QUICK")
-if QUICK:  # smoke test: small samples, results kept apart
-    kl.MODEL_DIR = OUT = Path(QUICK)
 ROLES = {"main": "main", "no_testbed": "without TTL, destination port and IAT"}
-SAMPLE = 3_000 if QUICK else 30_000  # segments per group, at most
+SAMPLE = 30_000  # segments per group, at most
 FEB_MAY = ["Video Injection", "SSDP Flood", "SYN DoS", "SSL Renegotiation"]
 AUG = ["OS Scan", "Fuzzing", "Active Wiretap"]
 
@@ -70,9 +67,12 @@ X, segments, y_all, lengths, _, _ = load_data()
 track = read_track(TRACK).set_index("segment", drop=False)
 part = split_index(track)
 held = pd.read_parquet(kl.TRACK_DIR / "held_out.parquet").set_index("segment", drop=False)
-selection = load_json(kl.RESULT_DIR / f"{TRACK}_selection.json")
+selection = load_json(OUT / f"{TRACK}_selection.json")
 name = selection["models"][ROLES[ROLE]][0]
-unit = joblib.load(kl.MODEL_DIR / f"{name}_unit.joblib") if not QUICK else None
+unit = joblib.load(kl.MODEL_DIR / f"{name}_unit.joblib")
+net = load_gru(name, len(unit["columns"]), *GRU_GRID[selection["arch"]],
+               rows=kl.rows_digest(TRACK, part["train"], part["val"], unit["columns"], unit["stats"], segments))
+kl.check_unit(unit, net.state_dict(), kl.MODEL_DIR / f"{name}_unit.joblib")  # the unit stage 3 built for this model
 print(f"Track {TRACK}, model {name}")
 
 
@@ -105,23 +105,6 @@ show(pd.DataFrame({g: {k: len(v) for k, v in d.items()} for g, d in groups.items
 
 
 # %%
-def psi(ref, cur, bins=10, floor=1e-4):
-    ref, cur = np.asarray(ref), np.asarray(cur)
-    if not len(ref) or not len(cur):
-        return np.nan
-    values = np.unique(ref)
-    if len(values) <= 20 or ref.dtype.kind in "OUb":  # few values: one bin per value (unseen values in their own bin)
-        cats = np.union1d(values, np.unique(cur))
-        e = pd.Series(ref).value_counts(normalize=True).reindex(cats, fill_value=0).to_numpy()
-        a = pd.Series(cur).value_counts(normalize=True).reindex(cats, fill_value=0).to_numpy()
-    else:
-        edges = np.unique(np.quantile(ref, np.linspace(0, 1, bins + 1))[1:-1])
-        e = np.bincount(np.searchsorted(edges, ref, side="right"), minlength=len(edges) + 1) / len(ref)
-        a = np.bincount(np.searchsorted(edges, cur, side="right"), minlength=len(edges) + 1) / len(cur)
-    e, a = np.maximum(e, floor), np.maximum(a, floor)
-    return float(np.sum((a - e) * np.log(a / e)))
-
-
 def packets(idx):
     """Raw input fields of every real packet of these segments."""
     x = np.array(X[idx])
@@ -131,12 +114,7 @@ def packets(idx):
 
 def model_view(idx):
     """P(attack) at the last packet and the answer at K = L, from the chosen model's deployable unit."""
-    if unit is None:
-        return pd.DataFrame({"P(attack)": np.zeros(len(idx)), "answer": "Medium"})
-    hidden, layers = GRU_GRID[selection["arch"]]
-    if "net" not in model_view.__dict__:
-        model_view.net, _ = fit_gru(name, np.zeros((1, 1, len(unit["columns"])), np.float32), np.zeros(1, np.float32), None, None, hidden, layers)
-    z, h = predict(model_view.net, load(X, idx, unit["stats"], unit["columns"]), with_hidden=True)
+    z, h = predict(net, load(X, idx, unit["stats"], unit["columns"]), with_hidden=True)
     n = lengths[idx]
     p = p_attack(z, unit["temperatures"])
     t = unit["thresholds"][L]

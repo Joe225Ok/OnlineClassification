@@ -41,11 +41,14 @@ def show(value):
 # validation segments are ever flagged by either detector.
 #
 # **Views**: "all" is the split as it is; "unseen" is "all" with every row whose sequence appears in this track's training
-# split removed. Ceilings (MaxAcc: Jerabek et al. Eq. 1; minimum FPR: their lower bound; MaxF1 and the oracle's missed attacks: our additions) are computed on
+# split removed, judged on each model's own key ("all inputs" for the main model and the baselines, "headers" for the model
+# without TTL, destination port and IAT). Ceilings (MaxAcc: Jerabek et al. Eq. 1; minimum FPR: their lower bound; MaxF1 and the oracle's missed attacks: our additions) are computed on
 # exactly the rows each result is measured on.
 
 
 # %%
+import copy
+import json
 import os
 import time
 from pathlib import Path
@@ -54,32 +57,23 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.ensemble import IsolationForest
 from sklearn.metrics import roc_auc_score
 
 import kitsune_lib as kl
-from kitsune_lib import (BUCKETS, CAPTURES, GRU_GRID, K_REPORT, L, SEED, STEP_BUCKET, at_prefix, at_rate, ceiling,
-                         fit_gru, fit_stats, fit_temperatures, flow_bootstrap, group_columns, known_metrics, load,
-                         load_data, load_json, ood_thresholds, p_attack, predict, read_track, real_steps, route,
-                         running_mean, scores, split_index, tune_targets)
+from kitsune_lib import (BUCKETS, CAPTURES, GRU_GRID, K_REPORT, KEYS, L, SEED, STEP_BUCKET, at_prefix, at_rate, ceiling,
+                         fit_stats, flow_bootstrap, group_columns, known_metrics, load, load_data, load_gru, load_json,
+                         model_key, p_attack, predict, read_track, real_steps, route, rows_digest, scores, split_index,
+                         tune_targets)
 
 TRACK = os.environ.get("TRACK", "A")
 OUT = kl.RESULT_DIR
-QUICK = os.environ.get("QUICK")
-if QUICK:  # smoke test against the stage-2 smoke-test models
-    kl.MODEL_DIR = OUT = Path(QUICK)
 HIDDEN_TRAIN, FOREST_STEPS = 30_000, 200_000
 DEPLOY_RATE = 0.01  # attack share assumed for the "real network" precision line
 
-X, segments, y_all, lengths, prefix_header, prefix_timed = load_data()
+X, segments, y_all, lengths, prefix_header, prefix_all = load_data()
 track = read_track(TRACK).set_index("segment", drop=False)
 part = split_index(track)
 held = pd.read_parquet(kl.TRACK_DIR / "held_out.parquet").set_index("segment", drop=False)
-if QUICK:
-    part = {k: v[::max(1, len(v) // 3000)] for k, v in part.items()}
-    held = held.iloc[::max(1, len(held) // 3000)]
-seg_hash = segments["hash"].to_numpy()
-train_hashes = seg_hash[part["train"]]
 selection = load_json(OUT / f"{TRACK}_selection.json")
 arch = selection["arch"]
 print(f"Track {TRACK}: size {arch}, main groups: {selection['final']['main']}")
@@ -94,8 +88,11 @@ cal_idx, thr_idx = train_test_split(part["val"], test_size=0.5, random_state=SEE
                                     stratify=strata if pd.Series(strata).value_counts().min() >= 2 else None)
 parts = {"train sample": np.sort(np.random.default_rng(SEED).choice(part["train"], min(HIDDEN_TRAIN, len(part["train"])), replace=False)),
          "cal": np.sort(cal_idx), "thr": np.sort(thr_idx), "val": part["val"], "test": part["test"], "held": held.index.to_numpy()}
-unseen_of = {p: ~np.isin(seg_hash[i], train_hashes) for p, i in parts.items()}
-print({p: f"{len(i):,} ({unseen_of[p].mean():.0%} unseen)" for p, i in parts.items()})
+# Unseen rows of every part under each key; each unit uses its model's key (u["unseen"])
+unseen_by_key = {key: {p: ~np.isin(segments[col].to_numpy()[i], segments[col].to_numpy()[part["train"]]) for p, i in parts.items()}
+                 for key, col in KEYS.items()}
+for key, u_of in unseen_by_key.items():
+    print(key, {p: f"{len(i):,} ({u_of[p].mean():.0%} unseen)" for p, i in parts.items()})
 
 
 # %% [markdown]
@@ -111,10 +108,12 @@ stats = fit_stats(X, part["train"])
 
 def unit_for(model_name, groups):
     cols = group_columns(groups)
-    model, _ = fit_gru(model_name, np.zeros((1, 1, len(cols)), np.float32), np.zeros(1, np.float32), None, None, *GRU_GRID[arch])
+    model = load_gru(model_name, len(cols), *GRU_GRID[arch], rows=rows_digest(TRACK, part["train"], part["val"], cols, stats, segments))
     u = kl.build_unit(X, model, cols, stats, parts, lengths, y_all, forest_steps=FOREST_STEPS)
-    u.update(model=model_name, groups=groups)
-    joblib.dump({k: u[k] for k in ["model", "groups", "columns", "stats", "temperatures", "fitted temperatures", "detectors", "thresholds"]},
+    u.update(model=model_name, groups=groups, key=model_key(groups), unseen=unseen_by_key[model_key(groups)],
+             **{"model weights": kl.weights_digest(model.state_dict())})  # the unit is valid with these weights only
+    joblib.dump({k: u[k] for k in ["model", "groups", "columns", "stats", "temperatures", "fitted temperatures", "detectors",
+                                   "thresholds", "model weights"]},
                 kl.MODEL_DIR / f"{model_name}_unit.joblib")
     return u
 
@@ -148,7 +147,7 @@ for name, u in units.items():
     for p in ("val", "test"):
         for K in K_REPORT:
             out, packets = decide(u, p, K)
-            for view, m in [("all", np.ones(len(out), bool)), ("unseen", unseen_of[p])]:
+            for view, m in [("all", np.ones(len(out), bool)), ("unseen", u["unseen"][p])]:
                 r = known_metrics(out[m], u["y"][p][m], packets[m])
                 r["block precision at 1% attacks"] = at_rate(r["attacks blocked"], r["benign blocked"], DEPLOY_RATE)
                 rows.append({"model": name, "split": p, "K": K, "view": view, **r})
@@ -165,7 +164,7 @@ show(pipeline.loc[(main["model"], ["val", "test"], L), shown].round(4))
 flow_key = (track.loc[parts["test"], "capture"] + "/" + track.loc[parts["test"], "flow"].astype(str)).to_numpy()
 out, _ = decide(main, "test", L)
 cis = {view: flow_bootstrap(out[m], main["y"]["test"][m], flow_key[m]) for view, m in
-       [("all", np.ones(len(out), bool)), ("unseen", unseen_of["test"])]}
+       [("all", np.ones(len(out), bool)), ("unseen", main["unseen"]["test"])]}
 pd.DataFrame(cis).to_csv(OUT / f"{TRACK}_bootstrap.csv")
 show(pd.DataFrame(cis))
 
@@ -179,7 +178,7 @@ capture_of = track.loc[parts["test"], "capture"].to_numpy()
 start_of = track.loc[parts["test"], "start"].to_numpy()
 out, packets = decide(main, "test", L)
 rows = []
-for view, vm in [("all", np.ones(len(out), bool)), ("unseen", unseen_of["test"])]:
+for view, vm in [("all", np.ones(len(out), bool)), ("unseen", main["unseen"]["test"])]:
     for capture in CAPTURES:
         m = vm & (capture_of == capture)
         if not m.any():
@@ -239,10 +238,12 @@ show(decision_time.round(4))
 # %% [markdown]
 # ## Forced answers and ceilings on the same rows
 #
-# A ceiling bounds a model only when identical rows are identical *in what the model reads*. The "headers" key is exactly
-# the input of the model without TTL, destination port and IAT, so its ceilings are upper bounds for that model. No key
-# holds TTL and destination port, so for the main model (and the baselines, which read its inputs) the ceilings are
-# reference values only: a model that reads more fields can separate rows the key treats as identical and score above them.
+# A ceiling bounds a model only when identical rows are identical *in what the model reads*. Each model has its own key:
+# "headers" holds exactly the inputs of the model without TTL, destination port and IAT, and "all inputs" those of the
+# main model (and of the baselines, which read the same inputs), so each model's ceilings on its own key are upper bounds
+# for it. Both keys are shown for every model. "above own ceiling" flags a forced accuracy above the MaxAcc of the model's
+# own key on the same rows, which should not happen: the only way it can is the IAT, held in whole microseconds by the
+# key (data/results/iat_resolution.csv counts the gaps that are not).
 
 
 # %%
@@ -251,17 +252,22 @@ rows = []
 for name, u in units.items():
     for p in ("val", "test"):
         idx = parts[p]
-        for view, m in [("all", np.ones(len(idx), bool)), ("unseen", unseen_of[p])]:
+        for view, m in [("all", np.ones(len(idx), bool)), ("unseen", u["unseen"][p])]:
             for k in PREFIXES:
                 pred = (at_prefix(u["prob"][p], u["n"][p], k)[m] >= 0.5).astype(int)
                 r = {"model": name, "split": p, "view": view, "k": k, **scores(u["y"][p][m], pred)}
-                for key, H in [("headers + IAT", prefix_timed), ("headers", prefix_header)]:
+                for key, H in [("all inputs", prefix_all), ("headers", prefix_header)]:
                     c = ceiling(H[idx[m], k - 1], u["y"][p][m])
                     r.update({f"{cname}, {key}": value for cname, value in c.items() if cname != "rows"})
+                r["own key"] = u["key"]
+                r["above own ceiling"] = bool(r["accuracy"] > r[f"MaxAcc, {u['key']}"] + 1e-12)
                 r["rows"] = int(m.sum())
                 rows.append(r)
 forced = pd.DataFrame(rows).set_index(["model", "split", "view", "k"])
 forced.to_csv(OUT / f"{TRACK}_forced_and_ceilings.csv")
+if forced["above own ceiling"].any():
+    print(f"WARNING: {int(forced['above own ceiling'].sum())} rows of {TRACK}_forced_and_ceilings.csv score above their own "
+          f"ceiling; see iat_resolution.csv", flush=True)
 no_testbed = selection["models"]["without TTL, destination port and IAT"][0]
 # The model without the testbed group, against its exact ceilings (key "headers")
 show(forced.loc[(no_testbed, "test"), ["rows", "accuracy", "MaxAcc, headers", "macro F1", "MaxF1, headers", "FPR",
@@ -269,9 +275,9 @@ show(forced.loc[(no_testbed, "test"), ["rows", "accuracy", "MaxAcc, headers", "m
 
 
 # %%
-# The main model, with the ceilings as reference values (the keys leave out TTL and destination port)
-show(forced.loc[(main["model"], "test"), ["rows", "accuracy", "MaxAcc, headers + IAT", "macro F1", "MaxF1, headers + IAT", "FPR",
-                                     "minimum FPR, headers + IAT", "missed attacks", "minimum missed attacks, headers + IAT"]].round(4))
+# The main model, against its exact ceilings (key "all inputs")
+show(forced.loc[(main["model"], "test"), ["rows", "accuracy", "MaxAcc, all inputs", "macro F1", "MaxF1, all inputs", "FPR",
+                                     "minimum FPR, all inputs", "missed attacks", "minimum missed attacks, all inputs"]].round(4))
 
 
 # %% [markdown]
@@ -300,7 +306,7 @@ rows, reliability = [], []
 for name, u in units.items():
     for reading, T in [("capped (used)", u["temperatures"]), ("fitted, uncapped", u["fitted temperatures"])]:
         prob = p_attack(u["z"]["test"], T)
-        for view, m in [("all", np.ones(len(u["y"]["test"]), bool)), ("unseen", unseen_of["test"])]:
+        for view, m in [("all", np.ones(len(u["y"]["test"]), bool)), ("unseen", u["unseen"]["test"])]:
             for k in [1, 3, 10, L]:
                 p, y = at_prefix(prob, u["n"]["test"], k)[m], u["y"]["test"][m]
                 rows.append({"model": name, "temperature": reading, "view": view, "k": k, **calibration(p, y)})
@@ -329,7 +335,7 @@ for name, u in units.items():
         t = tune_targets(prob["thr"], flags["thr"], u["n"]["thr"], u["y"]["thr"], K)
         uncapped = route(prob["test"], flags["test"], u["n"]["test"], t["tau_attack"], t["tau_benign"], K)
         for reading, (out, packets) in [("capped (used)", decide(u, "test", K)), ("fitted, uncapped", uncapped)]:
-            for view, m in [("all", np.ones(len(out), bool)), ("unseen", unseen_of["test"])]:
+            for view, m in [("all", np.ones(len(out), bool)), ("unseen", u["unseen"]["test"])]:
                 rows.append({"model": name, "temperature": reading, "K": K, "view": view,
                              **known_metrics(out[m], u["y"]["test"][m], packets[m])})
 cap_answers = pd.DataFrame(rows).set_index(["model", "temperature", "K", "view"])
@@ -342,7 +348,7 @@ show(cap_answers.xs("all", level="view")[["coverage", "attacks blocked", "block 
 # ## Held-out captures: Mirai (another network) and ARP MitM (same network)
 #
 # On held-out traffic the only correct answer is "I don't know" (Medium or OOD); any High or Low answer is a failure, even
-# when it matches the label. Mirai's labels are time-based (everything after packet 121,622 counts as attack), so its groups
+# when it matches the label. Mirai's labels are time-based (every packet from 121,622 on counts as attack), so its groups
 # are read as before and during infection.
 
 
@@ -353,7 +359,7 @@ label_of = main["y"]["held"]
 rows = []
 for name, u in units.items():
     out, _ = decide(u, "held", L)
-    for view, vm in [("all", np.ones(len(out), bool)), ("unseen", unseen_of["held"])]:
+    for view, vm in [("all", np.ones(len(out), bool)), ("unseen", u["unseen"]["held"])]:
         for capture in ["Mirai", "ARP MitM"]:
             for lab, desc in [(0, "before infection" if capture == "Mirai" else "benign"), (1, "during infection" if capture == "Mirai" else "attack")]:
                 m = vm & (cap_of == capture) & (label_of == lab)
@@ -413,8 +419,8 @@ show(detector_overlap.round(4))
 # XGBoost, at each checkpoint k on the first k packets of the main model's inputs. Every model is read at the
 # same checkpoints with the OOD gate off, gets its High/Low cut-offs from the same precision targets on the same rows of
 # the second validation half, and is scored on the same 15,000 test rows. Forced answers (P(attack) >= 0.5) sit next to the
-# ceilings on those rows; the H/M/L reading is the main comparison. These models read TTL and destination port, which the
-# ceiling key leaves out, so the ceilings here are reference values, not upper bounds.
+# ceilings on those rows; the H/M/L reading is the main comparison. These models read the main model's inputs, so the
+# ceilings are on the "all inputs" key and are upper bounds for every one of them ("above own ceiling" flags a breach).
 
 
 # %%
@@ -426,8 +432,16 @@ rng = np.random.default_rng(SEED)
 pick = {p: np.sort(rng.choice(len(parts[p]), min(EVAL_ROWS, len(parts[p])), replace=False)) for p in ("thr", "test")}
 cols = main["columns"]
 cache = OUT / f"{TRACK}_baseline_probs.npz"
+# What the cached probabilities were computed from: the settings, the rows (training, evaluated), the inputs read and
+# their standardisation, and the labels
+baseline_fingerprint = {"training version": kl.TRAINING_VERSION, "checks": CHECKS, "evaluated rows": EVAL_ROWS, "k-NN training rows": KNN_TRAIN, "neighbours": NEIGHBOURS,
+                        "xgboost": "n_estimators=200, max_depth=6, learning_rate=0.1, hist", "seed": SEED,
+                        "data": kl.digest(part["train"], parts["thr"][pick["thr"]], parts["test"][pick["test"]], np.asarray(cols),
+                                          stats[0], stats[1], y_all[part["train"]], segments["hash_all"].to_numpy()[part["train"]])}
 if cache.exists():
     probs = dict(np.load(cache))
+    stored = probs.pop("fingerprint", None)
+    kl.check_fingerprint(None if stored is None else json.loads(str(stored)), baseline_fingerprint, cache)
 else:
     x_tr, y_tr = load(X, part["train"], stats, cols), y_all[part["train"]]
     knn_rows = rng.permutation(len(x_tr))[:KNN_TRAIN]
@@ -444,7 +458,7 @@ else:
             probs[f"k-NN|{p}"][:, j] = y_tr[knn_rows][nn.kneighbors(f, return_distance=False)].mean(axis=1)
             probs[f"XGBoost|{p}"][:, j] = xgb.predict_proba(f)[:, 1]
         print(f"k={k}: {time.time() - t0:.0f}s")
-    np.savez(cache, **probs)
+    np.savez(cache, fingerprint=np.array(json.dumps(baseline_fingerprint)), **probs)
 for p in pick:  # the GRU read at the same checkpoints
     probs[f"GRU|{p}"] = np.stack([at_prefix(main["prob"][p][pick[p]], main["n"][p][pick[p]], k) for k in CHECKS], axis=1)
 
@@ -453,7 +467,7 @@ y_ev = {p: main["y"][p][pick[p]] for p in pick}
 full = {p: np.full(len(pick[p]), len(CHECKS)) for p in pick}
 no_flags = {p: np.zeros((len(pick[p]), len(CHECKS)), bool) for p in pick}
 test_idx = parts["test"][pick["test"]]
-test_unseen = unseen_of["test"][pick["test"]]
+test_unseen = main["unseen"]["test"][pick["test"]]
 for m in ["GRU", "k-NN", "XGBoost"]:
     t = tune_targets(probs[f"{m}|thr"], no_flags["thr"], full["thr"], y_ev["thr"], len(CHECKS))
     out, _ = route(probs[f"{m}|test"], no_flags["test"], full["test"], t["tau_attack"], t["tau_benign"], len(CHECKS))
@@ -462,12 +476,16 @@ for m in ["GRU", "k-NN", "XGBoost"]:
                      **known_metrics(out[vm], y_ev["test"][vm])})
         for j, k in enumerate(CHECKS):
             r = {"model": m, "view": view, "k": k, **scores(y_ev["test"][vm], (probs[f"{m}|test"][vm, j] >= 0.5).astype(int))}
-            c = ceiling(prefix_timed[test_idx[vm], k - 1], y_ev["test"][vm])
-            forced_rows.append({**r, **{f"{name} (same rows)": value for name, value in c.items()}})
+            c = ceiling(prefix_all[test_idx[vm], k - 1], y_ev["test"][vm])  # key "all inputs": exact for every model here
+            forced_rows.append({**r, **{f"{name} (same rows)": value for name, value in c.items()},
+                                "above own ceiling": bool(r["accuracy"] > c["MaxAcc"] + 1e-12)})
 baselines = pd.DataFrame(rows).set_index(["model", "view"])
 baselines_forced = pd.DataFrame(forced_rows).set_index(["model", "view", "k"])
 baselines.to_csv(OUT / f"{TRACK}_baselines.csv")
 baselines_forced.to_csv(OUT / f"{TRACK}_baselines_forced.csv")
+if baselines_forced["above own ceiling"].any():
+    print(f"WARNING: {int(baselines_forced['above own ceiling'].sum())} baseline rows score above their ceiling; "
+          f"see iat_resolution.csv", flush=True)
 show(baselines[["coverage", "attacks blocked", "block precision", "attacks called benign", "benign called Low", "Low precision",
            "accuracy when answering", "macro F1 when answering", "Medium"]].round(4))
 
@@ -525,21 +543,77 @@ show(evasion.round(4))
 
 # %% [markdown]
 # ## Deployment cost
+#
+# Test segments of the main model are classified packet by packet, as a deployment would: the GRU step, both OOD scores
+# (Isolation Forest, Mahalanobis), their running means against the OOD limits, the temperature and the High/Low cut-offs,
+# stopping at the answer. Everything runs on one thread. The time per packet covers that whole path, with the share of
+# each part; the answers are checked against the batch decision rule used in evaluation, so the timed code is the logic
+# that was measured.
 
 
 # %%
+COST_SEGMENTS = 300  # test segments timed
 hidden, layers = GRU_GRID[arch]
 net = main["net"].eval()
+t_L = main["tuned"][L]
+limits = {d: np.asarray(t_L["ood limits"][d]) for d in kl.DETECTORS}
+forest = copy.deepcopy(main["detectors"]["forest"]).set_params(n_jobs=1)  # one thread, like the rest
+maha = main["detectors"]["mahalanobis"]
+PARTS = ["GRU", "Isolation Forest", "Mahalanobis", "decision rule"]
+
+
+@torch.no_grad()
+def classify_stream(x, n, K=L):
+    """One segment, one packet at a time. Returns its answer, the packet it came at and the seconds spent in each part."""
+    spent, sums, state = dict.fromkeys(PARTS, 0.0), np.zeros(len(kl.DETECTORS)), None
+    last = min(int(n), K)
+    for k in range(1, last + 1):
+        t0 = time.perf_counter()
+        o, state = net.gru(x[None, k - 1:k], state)
+        z = float(net.head(o))
+        h = o[0].numpy()
+        t1 = time.perf_counter()
+        score = {"forest": -forest.score_samples(h)[0]}
+        t2 = time.perf_counter()
+        score["mahalanobis"] = min(float((((h - mu) @ maha["precision"]) * (h - mu)).sum()) for mu in maha["means"])
+        t3 = time.perf_counter()
+        sums += [score[d] for d in kl.DETECTORS]
+        flagged = any(sums[i] / k > limits[d][STEP_BUCKET[k - 1]] for i, d in enumerate(kl.DETECTORS))
+        p = 1 / (1 + np.exp(z / main["temperatures"][k - 1]))
+        answer = "OOD" if flagged else "High" if p >= t_L["tau_attack"] else None
+        if answer is None and k == last:
+            answer = "Low" if p <= t_L["tau_benign"] else "Medium"
+        t4 = time.perf_counter()
+        for part_name, s in zip(PARTS, [t1 - t0, t2 - t1, t3 - t2, t4 - t3]):
+            spent[part_name] += s
+        if answer:
+            return answer, k, spent
+
+
 torch.set_num_threads(1)
-one = torch.from_numpy(load(X, parts["test"][:1], stats, main["columns"])[:, :1])
-state, t0 = None, time.perf_counter()
-with torch.no_grad():
-    for _ in range(5000):
-        o_, state = net.gru(one, state)
-        net.head(o_)
-per_packet_us = (time.perf_counter() - t0) / 5000 * 1e6
+timed = np.sort(np.random.default_rng(SEED).choice(len(parts["test"]), min(COST_SEGMENTS, len(parts["test"])), replace=False))
+x_timed = torch.from_numpy(load(X, parts["test"][timed], stats, main["columns"]))
+n_timed = main["n"]["test"][timed]
+classify_stream(x_timed[0], n_timed[0])  # warm-up, not counted
+runs = [classify_stream(x_timed[i], n_timed[i]) for i in range(len(timed))]
 torch.set_num_threads(os.cpu_count())
+batch_out, batch_packets = decide(main, "test", L)
+same = np.mean([(a, k) == (batch_out[j], batch_packets[j]) for (a, k, _), j in zip(runs, timed)])
+if same < 0.99:  # the timed path must be the evaluated decision rule
+    raise SystemExit(f"streaming answers agree with evaluation on only {same:.1%} of the timed segments")
+timed_packets = sum(k for _, k, _ in runs)
+spent = {part_name: sum(s[part_name] for _, _, s in runs) for part_name in PARTS}
+per_packet_us = sum(spent.values()) / timed_packets * 1e6
+# What a streaming deployment keeps per open flow between packets (float32 = 4 bytes)
+state_parts = {
+    "GRU hidden state (bytes)": layers * hidden * 4,          # one hidden vector per GRU layer
+    "OOD running sums (bytes)": len(kl.DETECTORS) * 4,        # one running sum per detector; divided by the count below
+    "packet counter (bytes)": 1,                              # packets seen in the current segment, at most L = 50
+}
 cost = {"inference per packet, one thread (us)": per_packet_us, "packets per second, one thread": 1e6 / per_packet_us,
-        "state per flow (bytes)": layers * hidden * 4 + 8, "forest trees": 200}
+        **{f"{part_name}, per packet (us)": s / timed_packets * 1e6 for part_name, s in spent.items()},
+        "timed segments": len(timed), "timed packets": int(timed_packets), "answers equal to evaluation": float(same),
+        **state_parts, "state per flow (bytes)": sum(state_parts.values()),
+        "forest trees": main["detectors"]["forest"].n_estimators}
 kl.save_json(cost, OUT / f"{TRACK}_deployment_cost.json")
 show(cost)

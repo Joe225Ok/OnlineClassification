@@ -1,0 +1,45 @@
+# Unit tests, lint and coverage on every push and pull request; SonarQube analysis when a token is configured.
+# The tests need no data files (tests/ builds every input by hand), so they run on a plain runner.
+name: checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history, for SonarQube's blame information
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install (CPU build of torch, then the pinned requirements)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-dev.txt
+
+      - name: Lint (pyflakes)
+        run: python -m pyflakes src/Project/kitsune_lib.py src/Project/run_all.py src/Project/safeguard.py src/Project/pipeline tests
+
+      - name: Unit tests with coverage
+        run: python -m pytest -q --cov=src/Project --cov-report=xml:coverage.xml --cov-report=term
+
+      # SonarQube Cloud: runs only once the repository has a SONAR_TOKEN secret; until then this step is skipped and the
+      # job still passes. Settings: sonar-project.properties. The project's Automatic Analysis must be off in SonarQube
+      # Cloud (Administration > Analysis Method), or this CI analysis is refused.
+      # Check the action's current major version at https://github.com/marketplace/actions/official-sonarqube-scan
+      - name: SonarQube analysis
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

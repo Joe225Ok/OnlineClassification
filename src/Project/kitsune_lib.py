@@ -3,8 +3,10 @@
 Every stage imports this module, so data loading, the model, training and the metrics are defined once.
 Everything a track needs is computed from that track's own data; nothing here reads another track.
 """
+import hashlib
 import json
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +64,32 @@ def group_columns(groups):
     return [COL[c] for c in COLUMNS if c in names] + [MASK_IDX]
 
 
+# Sequence keys: two segments count as identical when their packets agree on every field of the key. The label is never
+# part of a key. Each key holds exactly the fields one model reads, so that its ceilings bound that model:
+#   "headers"     -> the model without TTL, destination port and IAT
+#   "all inputs"  -> the main model (and the k-NN / XGBoost baselines, which read the same inputs)
+# Duplicates, conflicts and Track B are judged on "headers"; the "unseen" view of each model uses that model's key.
+HEADER_KEY = ["direction", "frame_len", "protocol", "tcp_flags", "tcp_window", "ip_hlen", "l4_hlen", "arp_op", "is_ipv6"]
+ALL_INPUTS_KEY = HEADER_KEY + ["ttl", "dst_port"]  # plus the IAT in whole microseconds
+KEYS = {"headers": "hash", "all inputs": "hash_all"}  # key -> column of `segments` holding each segment's hash
+
+
+def packet_keys(p, iat_us):
+    """Per-packet hashes of both keys, for packets p (prepared as in stage 0) and their IAT in whole microseconds."""
+    header = pd.util.hash_pandas_object(p[HEADER_KEY], index=False).to_numpy()
+    all_inputs = pd.util.hash_pandas_object(p[ALL_INPUTS_KEY].assign(iat=iat_us), index=False).to_numpy()
+    return header, all_inputs
+
+
+def model_key(groups):
+    """The key that holds exactly what a model with these feature groups reads; no other set of groups has one."""
+    if set(groups) == set(GROUPS):
+        return "all inputs"
+    if set(groups) == set(GROUPS) - set(TESTBED_GROUPS):
+        return "headers"
+    raise ValueError(f"no sequence key matches the feature groups {sorted(groups)}")
+
+
 # Data -------------------------------------------------------------------------------------------------------
 
 GOLDEN = np.uint64(0x9E3779B97F4A7C15)
@@ -78,17 +106,22 @@ def prefix_hashes(H, lengths):
 
 
 def load_data():
-    """Inputs (memory-mapped), one row per segment, labels, lengths and prefix hashes (headers, headers + IAT)."""
+    """Inputs (memory-mapped), one row per segment (with its hash under each key), labels, lengths, and the prefix
+    hashes of both keys (segments x L: column k-1 identifies the first k packets). All written by stage 0."""
     X = np.load(DATA_DIR / "sequences.npy", mmap_mode="r")
     segments = pd.read_parquet(DATA_DIR / "segments.parquet")
-    lengths = segments["length"].to_numpy()
-    cache = DATA_DIR / "prefix_hashes.npz"
-    if not cache.exists():
-        h = np.load(DATA_DIR / "packet_hashes.npz")
-        np.savez(cache, header=prefix_hashes(h["header"], lengths), timed=prefix_hashes(h["timed"], lengths))
-    p = np.load(cache)
-    segments["hash"] = p["header"][:, -1]
-    return X, segments, segments["attack"].to_numpy(), lengths, p["header"], p["timed"]
+    p = np.load(DATA_DIR / "prefix_hashes.npz")
+    segments["hash"], segments["hash_all"] = p["header"][:, -1], p["all_inputs"][:, -1]
+    return X, segments, segments["attack"].to_numpy(), segments["length"].to_numpy(), p["header"], p["all_inputs"]
+
+
+def rows_digest(track, train_idx, val_idx, cols, stats, segments):
+    """What a final model was trained on, cheap to recompute in any stage: the track, its training and validation
+    segments with their labels and their hash under "all inputs" (which covers every stored field), the input columns
+    and their standardisation."""
+    rows = np.r_[train_idx, val_idx]
+    return digest(np.array(track), train_idx, val_idx, np.asarray(cols), stats[0], stats[1],
+                  segments["attack"].to_numpy()[rows], segments["hash_all"].to_numpy()[rows])
 
 
 def read_track(name):
@@ -136,7 +169,62 @@ class OnlineGRU(tnn.Module):
 
 
 GRU_GRID = {"64": (64, 1), "128": (128, 1), "128x2": (128, 2)}
-BATCH, MAX_EPOCHS, PATIENCE = 512, 10, 2
+BATCH, MAX_EPOCHS, PATIENCE, LR = 512, 10, 2, 1e-3
+# Version of the training code, recorded in every fingerprint (GRU models, stage 5's stateful model, the k-NN / XGBoost
+# baseline cache). Increase it whenever how a model is trained changes in a way the settings above do not show: the
+# optimizer, the loss or its class weighting, gradient clipping, the early-stopping rule, stage 5's training loop
+# (how it carries memory), or how the baselines are fitted. Every cache saved with another version then stops the run
+# instead of being reused.
+#   1: Adam, class-weighted loss over real packets, clipping at 1.0, early stopping on validation loss; stage 5
+#      refreshes every training segment's starting state in flow order each epoch; k-NN (L1) and weighted XGBoost.
+TRAINING_VERSION = 1
+
+
+# Fingerprints: what a cached model or result was computed from, so that a cache is never reused for other inputs ------
+
+def digest(*arrays):
+    """Short hash of the contents, dtypes and shapes of some arrays."""
+    h = hashlib.blake2b(digest_size=16)
+    for a in arrays:
+        a = np.ascontiguousarray(a)
+        h.update(f"{a.dtype.str}{a.shape}".encode())
+        h.update(a.data)
+    return h.hexdigest()
+
+
+def training_fingerprint(model_class, n_inputs, hidden, layers, seed, data, rows=None):
+    """Everything a training run depends on: the model, its size, the training settings and a hash of the data; `rows`
+    (from rows_digest) names the track rows, for models that later stages load with load_gru."""
+    return {"model class": model_class.__name__, "inputs": int(n_inputs), "hidden": int(hidden), "layers": int(layers),
+            "seed": int(seed), "batch": BATCH, "max epochs": MAX_EPOCHS, "patience": PATIENCE, "learning rate": LR,
+            "training version": TRAINING_VERSION, "data": data, "rows": rows}
+
+
+def weights_digest(state):
+    """Hash of a model's weights (a state dict): names, shapes and values."""
+    names = sorted(state)
+    return digest(np.array(names), *[state[k].detach().cpu().numpy() for k in names])
+
+
+def check_unit(unit, state, where):
+    """A unit (temperatures, OOD detectors fitted on one model's hidden states, cut-offs) is valid only with the model
+    weights it was built from: stop if `state` is any other model."""
+    built_for, given = unit.get("model weights"), weights_digest(state)
+    if built_for != given:
+        raise RuntimeError(f"{where}: the unit was built for other model weights (unit: {built_for}, model: {given}). "
+                           f"Rerun stage 3 for this model, then the export.")
+
+
+def check_fingerprint(stored, expected, path):
+    """Stop if a cached file was computed from other inputs; warn if it predates fingerprints and cannot be checked."""
+    if stored is None:
+        warnings.warn(f"{path} was saved before fingerprints were recorded: what it was computed from cannot be checked. "
+                      f"Delete it to recompute it with a fingerprint.", stacklevel=3)
+        return
+    differ = {k: (stored.get(k), v) for k, v in expected.items() if stored.get(k) != v}
+    if differ:
+        raise RuntimeError(f"{path} was computed from other inputs ({', '.join(f'{k}: saved {a}, now {b}' for k, (a, b) in differ.items())}). "
+                           f"Delete it to recompute it, or restore the inputs it was computed from.")
 
 
 def masked_loss(model, xb, yb, attack_weight, mask_at):
@@ -157,18 +245,23 @@ def eval_loss(model, x, y, attack_weight, mask_at):
     return sum(l * n for l, n in parts) / max(len(x), 1)
 
 
-def fit_gru(name, x_train, y_train, x_val, y_val, hidden, layers, seed=SEED, log=print):
-    """Early stopping on the class-weighted validation loss (all validation rows). Weights are cached by name."""
+def fit_gru(name, x_train, y_train, x_val, y_val, hidden, layers, seed=SEED, log=print, rows=None, model_class=None):
+    """Early stopping on the class-weighted validation loss (all validation rows). Weights are cached by name, with a
+    fingerprint of the model, settings and data; a cached model trained on anything else stops the run."""
     torch.manual_seed(seed)
     mask_at = x_train.shape[-1] - 1  # mask is always the last column
-    model = OnlineGRU(x_train.shape[-1], hidden, layers)
+    model_class = model_class or OnlineGRU  # stage 6 passes its dropout variant
+    model = model_class(x_train.shape[-1], hidden, layers)
     path = MODEL_DIR / f"{name}.pt"
+    fingerprint = training_fingerprint(model_class, x_train.shape[-1], hidden, layers, seed,
+                                       digest(x_train, y_train, x_val, y_val), rows)
     if path.exists():
         saved = torch.load(path)
+        check_fingerprint(saved.get("fingerprint"), fingerprint, path)
         model.load_state_dict(saved["state"])
         return model, saved["val_loss"]
     weight = float((y_train == 0).sum() / (y_train == 1).sum())
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(model.parameters(), lr=LR)
     rng = np.random.default_rng(seed)
     best, best_state, stale = np.inf, None, 0
     t0 = time.time()
@@ -192,13 +285,47 @@ def fit_gru(name, x_train, y_train, x_val, y_val, hidden, layers, seed=SEED, log
                 break
     model.load_state_dict(best_state)
     seconds = time.time() - t0
-    torch.save({"state": best_state, "val_loss": best, "weight": weight, "epochs": epoch + 1, "seconds": seconds}, path)
+    torch.save({"state": best_state, "val_loss": best, "weight": weight, "epochs": epoch + 1, "seconds": seconds,
+                "fingerprint": fingerprint}, path)
     # Actual training time of every model, for the report (appended, one row per model)
     times = MODEL_DIR / "training_times.csv"
     pd.DataFrame([{"model": name, "finished": time.strftime("%Y-%m-%d %H:%M:%S"), "epochs": epoch + 1,
                    "seconds": round(seconds), "training segments": len(x_train), "hidden": hidden, "layers": layers}]
                  ).to_csv(times, mode="a", header=not times.exists(), index=False)
     return model, best
+
+
+def load_gru(name, n_inputs, hidden, layers, rows):
+    """A final model trained by stage 2, loaded from MODEL_DIR; never trains. Its model, size and training rows
+    (`rows`, from rows_digest on the caller's own track) must match what it was trained with."""
+    path = MODEL_DIR / f"{name}.pt"
+    if not path.exists():
+        raise FileNotFoundError(f"{path} is missing: run the stage that trains it first (stage 2 for the final models)")
+    saved = torch.load(path)
+    stored = saved.get("fingerprint")
+    expected = {"model class": OnlineGRU.__name__, "inputs": int(n_inputs), "hidden": int(hidden), "layers": int(layers),
+                "training version": TRAINING_VERSION, "rows": rows}
+    check_fingerprint(None if stored is None else {k: stored.get(k) for k in expected}, expected, path)
+    model = OnlineGRU(n_inputs, hidden, layers)
+    model.load_state_dict(saved["state"])
+    return model.eval()
+
+
+@torch.no_grad()
+def chain_start_states(gru, x, rows, flows, layers, hidden):
+    """The hidden state each of `rows` of x starts from, the rows being in flow order with their flow in `flows`: zeros
+    for a flow's first row, otherwise the state the flow's previous row ends with, all computed with `gru` as it is
+    now. Returns layers x rows x hidden."""
+    start = torch.zeros(layers, len(rows), hidden)
+    _, flow = np.unique(flows, return_inverse=True)
+    rounds = pd.Series(flow).groupby(flow).cumcount().to_numpy()  # 0 for a flow's first row, 1 for its second, ...
+    state = torch.zeros(layers, flow.max() + 1, hidden)
+    for r in range(rounds.max() + 1 if len(rows) else 0):
+        at = np.flatnonzero(rounds == r)
+        start[:, at] = state[:, flow[at]]
+        _, last = gru(torch.from_numpy(np.ascontiguousarray(x[rows[at]])), state[:, flow[at]])
+        state[:, flow[at]] = last
+    return start
 
 
 @torch.no_grad()
@@ -243,14 +370,32 @@ def ceiling(hashes, y):
             "rows in conflict": int(((share > 0) & (share < 1)).sum())}
 
 
-# Re-cutting packets into segments of another length (segment-length experiment) ------------------------------
+# Per-packet inputs (as stored in sequences.npy). Stage 0 (training data) and segment_packets (inference) both use
+# these, so a capture is always read the same way --------------------------------------------------------------
 
-HEADER_KEY = ["direction", "frame_len", "protocol", "tcp_flags", "tcp_window", "ip_hlen", "l4_hlen", "arp_op", "is_ipv6"]
+def flow_positions(p, length=L):
+    """For packets sorted by flow and time: each packet's position in its segment (0 .. length-1) and its segment number
+    (segments numbered from 0 in that order), cutting every flow into consecutive segments of `length` packets."""
+    pos = p.groupby("flow").cumcount().to_numpy() % length
+    return pos, np.cumsum(pos == 0) - 1
+
+
+def packet_iat(p, pos):
+    """Seconds since the previous packet of the same segment (0 for a segment's first packet), packets sorted as above."""
+    return p["ts"].diff().where(pos != 0, 0).fillna(0).clip(lower=0).to_numpy()
+
+
+def add_protocol(p):
+    """Add the protocol code (1 TCP, 2 UDP, 3 ICMP, 4 ARP, 5 other IP, 0 none) and the IPv6 flag to parsed packets."""
+    p["protocol"] = np.select([p["ip_proto"] == 6, p["ip_proto"] == 17, p["ip_proto"].isin([1, 58]),
+                               p["ethertype"] == 0x806, p["ip_proto"] > 0], [1, 2, 3, 4, 5], 0)
+    p["is_ipv6"] = (p["ethertype"] == 0x86DD).astype(np.int8)
+    return p
 
 
 def packet_features(p, pos):
     """Stored columns for packets of one capture, ordered by flow and time (as in sequences.npy)."""
-    iat = p["ts"].diff().where(pos != 0, 0).fillna(0).clip(lower=0).to_numpy()
+    iat = packet_iat(p, pos)
     x = np.zeros((len(p), len(COLUMNS)), dtype=np.float32)
     x[:, COL["frame_len"]] = np.log1p(p["frame_len"])
     x[:, COL["tcp_window"]] = np.log1p(p["tcp_window"])
@@ -271,33 +416,6 @@ def packet_features(p, pos):
     return x
 
 
-def cut_segments(length, captures):
-    """Raw stored columns (segments x length x columns), and one row per segment with label, start and sequence hash."""
-    xs, metas, offset = [], [], 0
-    for order, capture in enumerate(captures):
-        p = pd.read_parquet(DATA_DIR / "packets" / f"{CAPTURES[capture]}.parquet").sort_values(["flow", "ts"], kind="stable").reset_index(drop=True)
-        pos = p.groupby("flow").cumcount().to_numpy() % length
-        seg = np.cumsum(pos == 0) - 1
-        p["protocol"] = np.select([p["ip_proto"] == 6, p["ip_proto"] == 17, p["ip_proto"].isin([1, 58]),
-                                   p["ethertype"] == 0x806, p["ip_proto"] > 0], [1, 2, 3, 4, 5], 0)
-        p["is_ipv6"] = (p["ethertype"] == 0x86DD).astype(np.int8)
-        x = np.zeros((seg[-1] + 1, length, len(COLUMNS)), np.float32)
-        x[seg, pos] = packet_features(p, pos)
-        H = np.zeros((seg[-1] + 1, length), np.uint64)
-        H[seg, pos] = pd.util.hash_pandas_object(p[HEADER_KEY], index=False).to_numpy()
-        m = pd.DataFrame({"segment": seg, "label": p["label"], "ts": p["ts"], "flow": p["flow"]}).groupby("segment").agg(
-            attack=("label", "max"), length=("label", "size"), start=("ts", "min"), flow=("flow", "first")).reset_index()
-        current = np.zeros(len(m), np.uint64)
-        for k in range(length):
-            current = np.where(m["length"].to_numpy() > k, (current * GOLDEN) ^ H[:, k], current)
-        m["hash"], m["capture"], m["capture_order"] = current, capture, order
-        m["segment"] += offset
-        offset += len(m)
-        xs.append(x)
-        metas.append(m)
-    return np.concatenate(xs), pd.concat(metas, ignore_index=True)
-
-
 # Parsing any capture file the way the training data was parsed (used for inference on new data) -------------
 
 PACKET_DTYPE = np.dtype([
@@ -309,8 +427,9 @@ PACKET_DTYPE = np.dtype([
 
 
 def parse_pcap(stream, limit=None):
-    """One row per packet of a PCAP or PCAPNG stream, in file order; the same fields and flow rule as the training data.
-    IPs, MACs and ports only assign the flow id; they are not stored."""
+    """One row per packet of a PCAP or PCAPNG stream, in file order; used for the training data (stage 0) and for new
+    captures (infer.py) alike. IPs, MACs and ports only assign the flow id; they are not stored. The file type is read
+    from the magic number, not the extension (Mirai's .pcap is really pcapng)."""
     import dpkt
     reader = dpkt.pcapng.Reader(stream) if stream.peek(4)[:4] == b"\n\r\r\n" else dpkt.pcap.Reader(stream)
     rows, flows = [], {}  # canonical key -> (flow id, endpoint that sent the first packet)
@@ -331,7 +450,7 @@ def parse_pcap(stream, limit=None):
                 src, dst, proto = ip.src, ip.dst, ip.p
                 if isinstance(ip, dpkt.ip.IP):
                     ttl, ip_hlen = ip.ttl, ip.hl * 4
-                    frame_len = (ip.len + 14) if ip.len else frame_len  # captures may cut frames short
+                    frame_len = (ip.len + 14) if ip.len else frame_len  # captures cut frames short (Kitsune: 200 bytes)
                 else:
                     ttl, ip_hlen = ip.hlim, 40
                     frame_len = ip.plen + 54
@@ -358,11 +477,8 @@ def segment_packets(p, length=L):
     """Stored columns (segments x length x columns) and one row per segment (flow, start, length, label if given),
     cutting each flow into consecutive segments of `length` packets, as for the training data."""
     p = p.assign(packet=np.arange(len(p))).sort_values(["flow", "ts"], kind="stable").reset_index(drop=True)
-    pos = p.groupby("flow").cumcount().to_numpy() % length
-    seg = np.cumsum(pos == 0) - 1
-    p["protocol"] = np.select([p["ip_proto"] == 6, p["ip_proto"] == 17, p["ip_proto"].isin([1, 58]),
-                               p["ethertype"] == 0x806, p["ip_proto"] > 0], [1, 2, 3, 4, 5], 0)
-    p["is_ipv6"] = (p["ethertype"] == 0x86DD).astype(np.int8)
+    pos, seg = flow_positions(p, length)
+    add_protocol(p)
     x = np.zeros((seg[-1] + 1, length, len(COLUMNS)), np.float32)
     x[seg, pos] = packet_features(p, pos)
     agg = {"flow": ("flow", "first"), "start": ("ts", "min"), "length": ("ts", "size"), "first_packet": ("packet", "min")}
@@ -626,6 +742,26 @@ def flow_bootstrap(outcome, y, flow_key, n_boot=200, seed=SEED):
         stats = {"attacks blocked": s[:, 5] / s[:, 0], "block precision": s[:, 5] / s[:, 2],
                  "Low precision": s[:, 6] / s[:, 3], "coverage": s[:, 4] / (s[:, 0] + s[:, 1])}
     return {f"{k}, 95% CI": (float(np.nanpercentile(v, 2.5)), float(np.nanpercentile(v, 97.5))) for k, v in stats.items()}
+
+
+def psi(ref, cur, bins=10, floor=1e-4):
+    """Population stability index of `cur` against `ref`: sum over bins of (cur share - ref share) x ln(cur / ref share).
+    Bins are deciles of ref; with at most 20 distinct values (or text), one bin per value, unseen values in their own.
+    Empty bins get `floor`."""
+    ref, cur = np.asarray(ref), np.asarray(cur)
+    if not len(ref) or not len(cur):
+        return np.nan
+    values = np.unique(ref)
+    if len(values) <= 20 or ref.dtype.kind in "OUb":
+        cats = np.union1d(values, np.unique(cur))
+        e = pd.Series(ref).value_counts(normalize=True).reindex(cats, fill_value=0).to_numpy()
+        a = pd.Series(cur).value_counts(normalize=True).reindex(cats, fill_value=0).to_numpy()
+    else:
+        edges = np.unique(np.quantile(ref, np.linspace(0, 1, bins + 1))[1:-1])
+        e = np.bincount(np.searchsorted(edges, ref, side="right"), minlength=len(edges) + 1) / len(ref)
+        a = np.bincount(np.searchsorted(edges, cur, side="right"), minlength=len(edges) + 1) / len(cur)
+    e, a = np.maximum(e, floor), np.maximum(a, floor)
+    return float(np.sum((a - e) * np.log(a / e)))
 
 
 def save_json(obj, path):

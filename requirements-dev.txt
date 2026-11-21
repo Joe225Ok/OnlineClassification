@@ -1,0 +1,11 @@
+# Tools for checking the code; not needed to run the pipeline (that is requirements.txt).
+#   pip install -r requirements-dev.txt
+#   python -m pytest                                   # unit tests in tests/, from the repository root
+#   python -m pytest --cov=src/Project --cov-report=xml:coverage.xml   # with coverage (SonarQube reads it)
+#   python -m pyflakes src/Project/kitsune_lib.py src/Project/run_all.py src/Project/safeguard.py src/Project/pipeline tests
+#                                                      # unused imports and undefined names (as in CI; environment.py
+#                                                      # imports libraries on purpose, to report their thread pools)
+-r requirements.txt
+pytest==9.2.0
+pytest-cov==7.1.0
+pyflakes==4.1.0

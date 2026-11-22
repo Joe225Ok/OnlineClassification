@@ -1,0 +1,64 @@
+# Environment of the run started 2026-11-21 02:14:28, written by environment.py
+
+## Machine
+OS: Windows-11-10.0.26300-SP0 (AMD64)
+CPU: Intel(R) Core(TM) Ultra 9 288V
+cores: 8 physical, 8 logical
+memory: 31.6 GB (16.7 GB free at the start)
+GPU: none used (every stage runs on the CPU)
+
+## Run settings that affect the results
+run_all.py: 2 step(s) at a time, 4 CPU threads per step; command: python run_all.py --jobs 2
+random seed: SEED = 0 in kitsune_lib.py (numpy, torch, scikit-learn, XGBoost)
+OMP_NUM_THREADS: 4
+MKL_NUM_THREADS: 4
+OPENBLAS_NUM_THREADS: not set
+PYTHONHASHSEED: not set
+Rerun with the same --jobs on a CPU with the same instruction set for bit-identical results.
+
+## Numeric libraries (as loaded in a pipeline step)
+torch 2.9.0+cpu: CPU capability AVX2, BLAS mkl, parallel backend OpenMP, CUDA available: False
+torch threads: intra-op 4, inter-op 8
+thread pool: openblas 0.3.29 (blas, 4 threads, libscipy_openblas64_-13e2df515630b4a41f92893938845698.dll, Haswell)
+thread pool: openblas 0.3.29.dev (blas, 4 threads, libscipy_openblas-48c358d105077551cc9cc3ba79387ed5.dll, Haswell)
+thread pool: openmp  (openmp, 4 threads, vcomp140.dll)
+thread pool: openmp  (openmp, 4 threads, libiomp5md.dll)
+thread pool: openmp  (openmp, 1 threads, libiompstubs5md.dll)
+
+## Software
+Python 3.13.7 (C:\dev_workspace\venv_lab\venv313lab\Scripts\python.exe)
+report and slides: pdfTeX 3.141592653-2.6-1.40.28 (TeX Live 2025)
+
+## Python packages
+# The packages the project imports and everything they depend on, at the versions the results were produced with.
+contourpy==1.4.0
+cycler==0.12.1
+dpkt==1.9.8
+filelock==4.2.10
+fonttools==4.65.0
+fsspec==2026.9.0
+Jinja2==3.1.6
+joblib==1.5.2
+kiwisolver==1.5.1
+MarkupSafe==3.0.4
+matplotlib==3.10.7
+mpmath==1.3.0
+networkx==3.7
+numpy==2.2.6
+packaging==26.3
+pandas==2.3.3
+pillow==12.3.0
+pyarrow==22.0.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pytz==2026.6
+scikit-learn==1.7.2
+scipy==1.16.3
+setuptools==84.0.0
+six==1.17.0
+sympy==1.14.0
+threadpoolctl==3.7.0
+torch==2.9.0
+typing_extensions==4.16.0
+tzdata==2026.4
+xgboost==3.1.1

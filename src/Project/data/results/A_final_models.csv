@@ -1,0 +1,3 @@
+role,seed,groups,model,"validation loss, all","validation loss, unseen",key
+main,0,"sizes, header lengths, TCP flags, TCP window, protocol, direction, IAT, TTL, destination port",A_size_128x2,0.07414858488938925,0.07321814769104497,all inputs
+"without TTL, destination port and IAT",0,"sizes, header lengths, TCP flags, TCP window, protocol, direction",A_128x2_no_testbed,0.1395705553439057,0.22125547639951965,headers

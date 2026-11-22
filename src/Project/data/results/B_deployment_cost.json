@@ -1,0 +1,16 @@
+{
+  "inference per packet, one thread (us)": 4262.075541247646,
+  "packets per second, one thread": 234.6274697203673,
+  "GRU, per packet (us)": 280.8810702062123,
+  "Isolation Forest, per packet (us)": 3931.735076503817,
+  "Mahalanobis, per packet (us)": 35.84648103221675,
+  "decision rule, per packet (us)": 13.612913505399654,
+  "timed segments": 300,
+  "timed packets": 10671,
+  "answers equal to evaluation": 1.0,
+  "GRU hidden state (bytes)": 1024,
+  "OOD running sums (bytes)": 8,
+  "packet counter (bytes)": 1,
+  "state per flow (bytes)": 1033,
+  "forest trees": 200
+}

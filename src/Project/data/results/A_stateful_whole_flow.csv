@@ -1,0 +1,3 @@
+memory,all flows: attack,all flows: benign,all flows: attack ever blocked,all flows: benign ever blocked,multi-segment flows: attack,multi-segment flows: benign,multi-segment flows: attack ever blocked,multi-segment flows: benign ever blocked,"attack packets before block, median","attack packets before block, p95"
+reset,26407,217,0.9983337751353808,0.423963133640553,14,67,1.0,0.2835820895522388,1.0,1.0
+carried,26407,217,0.9981065626538418,0.31336405529953915,14,67,0.9285714285714286,0.1791044776119403,1.0,1.0

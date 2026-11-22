@@ -1,0 +1,22 @@
+comparison,score,AUROC,caught at 5%,segments
+ARP MitM (ARP) vs known test,epistemic (running mean),0.008585367983322609,0.0,40
+ARP MitM (ARP) vs known test,forest (running mean),0.6390034762772727,0.0,40
+ARP MitM (ARP) vs known test,mahalanobis (running mean),0.9924324117833248,1.0,40
+"ARP MitM (ARP), answered vs right test",aleatoric,,,0
+"ARP MitM (ARP), answered vs right test",epistemic,,,0
+"ARP MitM (ARP), answered vs right test",total,,,0
+ARP MitM (relayed) vs known test,epistemic (running mean),0.7463093063514639,0.06269317434046541,50149
+ARP MitM (relayed) vs known test,forest (running mean),0.34738563004056233,0.0008175636602923288,50149
+ARP MitM (relayed) vs known test,mahalanobis (running mean),0.5460162025031506,0.02971145984964805,50149
+"ARP MitM (relayed), answered vs right test",aleatoric,0.45587088738506215,0.02131401238041643,14216
+"ARP MitM (relayed), answered vs right test",epistemic,0.4673356138107713,0.02905177265053461,14216
+"ARP MitM (relayed), answered vs right test",total,0.45590600430334927,0.021384355655599326,14216
+Mirai vs known test,epistemic (running mean),0.6445038928586662,0.49911269803938335,46771
+Mirai vs known test,forest (running mean),0.8107671139847948,0.11889846272262727,46771
+Mirai vs known test,mahalanobis (running mean),0.9059716002796748,0.6778773171409634,46771
+"Mirai, answered vs right test",aleatoric,0.8341927911091888,0.08152866242038216,7850
+"Mirai, answered vs right test",epistemic,0.878894877936322,0.39528662420382166,7850
+"Mirai, answered vs right test",total,0.835715507876339,0.08191082802547771,7850
+"wrong vs right, known test (unseen)",aleatoric,0.9371055017148164,0.5046728971962616,321
+"wrong vs right, known test (unseen)",epistemic,0.9463267083232717,0.5794392523364486,321
+"wrong vs right, known test (unseen)",total,0.9378605359973642,0.5046728971962616,321

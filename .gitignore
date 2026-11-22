@@ -62,3 +62,7 @@ src/Project/overview/
 src/Project/report/
 src/Project/report_tools/
 src/Project/data/Kitsune_Classification.pdf
+
+# Machine record of a run: holds local paths and machine details; kept locally, never published
+src/Project/data/results/environment.txt
+src/Project/runs/logs/environment_*.txt

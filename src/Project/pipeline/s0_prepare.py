@@ -142,7 +142,7 @@ print(f"  {'payload':<9}{len(layer)} bytes: {layer!r}")
 
 
 # %%
-# Proposal Table 1: capture -> folder and role (kitsune_lib.CAPTURES); ARP MitM and Mirai are held out
+# Capture -> folder and role (kitsune_lib.CAPTURES); ARP MitM and Mirai are held out
 # (kitsune_lib.OOD_CAPTURES). Segments of L = 50 packets; SEED = 0 for every random step.
 PACKET_DIR = DATA_DIR / "packets"
 PACKET_DIR.mkdir(exist_ok=True)
@@ -208,9 +208,9 @@ print("\nProtocols (ip_proto):", p["ip_proto"].value_counts().head(5).to_dict())
 
 
 # %% [markdown]
-# ## Week 2: flows, segments and inputs
+# ## Flows, segments and inputs
 #
-# Follows proposal Section 4.2, over all nine captures:
+# Over all nine captures:
 #
 # 1. **Flows.** IP packets are grouped by 5-tuple, non-IP packets by MAC pair and EtherType, both directions together.
 # 2. **Flow segments.** Each flow is cut into consecutive segments of L = 50 packets and **each segment is one sample**.

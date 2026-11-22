@@ -1,10 +1,11 @@
 # Environment of the run started 2026-11-21 02:14:28, written by environment.py
+# Published copy of environment.txt: the local Python path is removed and the machine is described in general
+# terms. Everything else is as the run recorded it.
 
-## Machine
-OS: Windows-11-10.0.26300-SP0 (AMD64)
-CPU: Intel(R) Core(TM) Ultra 9 288V
-cores: 8 physical, 8 logical
-memory: 31.6 GB (16.7 GB free at the start)
+## Machine (general description)
+OS: Windows 11 (AMD64)
+CPU: 8-core laptop CPU (x86-64 with AVX2), 8 threads
+memory: about 32 GB
 GPU: none used (every stage runs on the CPU)
 
 ## Run settings that affect the results
@@ -26,7 +27,7 @@ thread pool: openmp  (openmp, 4 threads, libiomp5md.dll)
 thread pool: openmp  (openmp, 1 threads, libiompstubs5md.dll)
 
 ## Software
-Python 3.13.7 (C:\dev_workspace\venv_lab\venv313lab\Scripts\python.exe)
+Python 3.13.7
 report and slides: pdfTeX 3.141592653-2.6-1.40.28 (TeX Live 2025)
 
 ## Python packages

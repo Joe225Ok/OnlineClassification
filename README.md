@@ -29,15 +29,64 @@ for both tracks, are in the notebook `Notebook/project_code.ipynb`.
 | 3 | `s3_evaluate.py` | deployable units, thresholds, all/unseen views, ceilings, baselines, per attack type, held-out traffic, drift, evasion, cost |
 | 4 | `s4_experiments.py` | retraining on OOD, leave-one-capture-out and Feb-May to Aug, whole flows |
 | 5 | `s5_stateful.py` | GRU trained to carry memory across a flow's segments |
-| 6 | `s6_uncertainty.py` | MC dropout on Track A, model without the testbed group: aleatoric and epistemic uncertainty |
+| 6 | `s6_uncertainty.py` | MC dropout on Track A, model without the testbed-specific group: aleatoric and epistemic uncertainty |
 | 7 | `s7_monitoring.py` | drift monitoring with the population stability index (PSI) |
 
 Stages 2-5 run once per track (`TRACK=A` or `B`); stages 6-7 for Track A with `ROLE=no_testbed`. `export_artifacts.py`
 runs after stage 3 for each track.
 
+## Dataset
+
+The project uses the Kitsune Network Attack dataset (Mirsky et al., NDSS 2018) from the UCI Machine Learning
+Repository. It holds nine captures, one per attack. Each capture mixes benign and malicious traffic and comes with a
+label for every packet. The captures were recorded on an IP surveillance network and an IoT network.
+
+- Seven captures are used for training, validation and test: OS Scan, Fuzzing, Video Injection, Active Wiretap,
+  SSDP Flood, SYN DoS and SSL Renegotiation.
+- Two captures are held out and never used in training: ARP MitM (same network) and Mirai (another network).
+- Only the raw packet captures (`*_pcap`) and the packet labels (`*_labels`) are used. The feature files that come with
+  the dataset (`*_dataset`) are not used.
+
+The dataset is not in this repository (about 19 GB zipped). It is the only file an end-to-end run needs:
+
+1. Download `kitsune+network+attack+dataset.zip` from
+   https://archive.ics.uci.edu/dataset/516/kitsune+network+attack+dataset.
+2. Put the zip file, as it is, in `src/Project/data/`. Stage 0 reads it directly, so there is no need to unzip it.
+3. Run the pipeline from `src/Project/` (see below).
+
+If the download does not work, please open an issue in this repository.
+
+## Findings
+
+Main results on Track A (labels as recorded), test split, decision at packet 50, for the chosen model (without TTL,
+destination port and inter-arrival time). The full results are in `data/results/`, and the report explains them.
+
+| Result | Value | File |
+|---|---|---|
+| Test attack segments blocked | 84.8% | `A_pipeline.csv` |
+| Blocks that are real attacks (target 99%) | 99.2% | `A_pipeline.csv` |
+| Attacks called benign | 0.2% | `A_pipeline.csv` |
+| Mean packets before a block | 2.2 | `A_pipeline.csv` |
+| Segments answered (the rest: "I don't know" or OOD) | 75% | `A_pipeline.csv` |
+
+- **Data quality.** On headers alone, only 0.7% of segments are distinct at the first packet, and 47.9% at 50 packets
+  (`diagnostics.csv`).
+- **Main model.** With TTL, destination port and inter-arrival time, block precision is 98.0%, below the 99% target
+  (`A_pipeline.csv`).
+- **New header patterns.** On test rows never seen in training, the chosen model blocks only 31% of attacks, with 92%
+  block precision (`A_pipeline.csv`).
+- **Another network.** The main model flags 74–83% of Mirai segments as OOD (before and during infection). ARP MitM,
+  from the same network, is almost never flagged (`A_held_out.csv`).
+- **Drift.** On ARP MitM, the population stability index of the answer mix is 0.46, a large shift
+  (`A_no_testbed_psi.csv`).
+- **Uncertainty.** On Mirai failures, epistemic uncertainty from MC dropout catches 40% at a 5% cost, against 8% for
+  aleatoric uncertainty (`A_no_testbed_mc_error_detection.csv`).
+
 ## Reproducing
 
-Every random step uses `SEED = 0`. Dependencies are listed in `requirements.txt` at the repository root (`pip install -r requirements.txt`, Python 3.13); the full environment they were produced in is in `data/results/environment.txt`. Trained models and results
+Every random step uses `SEED = 0`. Dependencies are listed in `requirements.txt` at the repository root (`pip install -r requirements.txt`, Python 3.13). The environment the results were produced in (library versions, thread
+settings and the full package list) is in `data/results/environment_published.txt`. It is a copy of the run's own record,
+with the local path removed and the machine described in general terms. Trained models and results
 are cached in `data/models_v2`, `data/results` and `data/tracks`; delete them to recompute from scratch (about 15 hours
 on an 8-thread laptop CPU, most of it GRU training).
 
@@ -69,10 +118,66 @@ stays until you delete it. Artifact folders are written under a temporary name a
 
 ### Tests
 
-`tests/` holds unit tests of `kitsune_lib.py` (decision rule, threshold tuning, ceilings, confidence bound, PSI, track
-rule, time split and the model-cache fingerprints) on small hand-made inputs, with every expected value worked out by
-hand. They need no data files and take a few seconds: `pip install -r requirements-dev.txt` (the pipeline's
-requirements plus pytest and pyflakes), then `python -m pytest` from the repository root. On GitHub,
+`tests/` holds unit tests of each component and one integration test of the whole pipeline. None needs the dataset;
+together they take about a minute and a half.
+
+**Unit tests** check each component on its own, on inputs built by hand, with every expected value worked out from how
+the input was built:
+- `test_kitsune_lib.py`: decision rule, threshold tuning, ceilings, confidence bound, PSI, track rule, time split,
+  model-cache fingerprints, artifact loading.
+- `test_components.py`: the packet parser on every kind of frame (TCP cut to 200 bytes, IPv6, ICMP, ARP, 802.3,
+  unparseable; PCAP and PCAPNG), segmentation, `infer.py`'s helpers and `export_artifacts.py`.
+- `test_tools.py`: `safeguard.py` (backup and restore on real files), `run_all.py` (step order, logs, a failed step put
+  back, no answer to the overwrite question) with fake pipeline steps, and `environment.py`.
+
+**Integration test** (`test_integration.py`): every pipeline script, unchanged, in order, in a temporary folder, on a
+small fully specified archive (`edge_case_data.py`: real PCAPNG and PCAP files with the edge cases of the Kitsune data,
+in its layout and label formats). Only the training budget is smaller (tiny GRUs, a few epochs), and the scripts are
+kept in the temporary folder so they never write to `data/` (`integration_support.py`). It checks three things:
+1. hand-derived values for the data stages, worked out from the dataset's specification: packets, flows, segments and
+   their labels, the time split, the 441 conflicting segments Track B drops, the held-out groups;
+2. invariants of the model stages: every cut-off meets its target where it is met, coverage is the share answered,
+   the uncertainty parts add up, `infer.py` on the raw capture reproduces the answers stage 3 measured, and so on;
+3. reference values: 69 model and data outputs compared, within a tolerance, with
+   `reference/integration_reference_<system>.json`, one file per operating system (`windows`, `linux`). They show that
+   results have not changed, not that they are right. They are written only by `python tests/record_reference.py`,
+   which records the commit and platform; re-record only after an agreed change to the pipeline, never to make a
+   failing test pass. Trained models give slightly different numbers on Windows and Linux (different low-level code
+   in PyTorch and the math libraries), so each platform has its own file, recorded from the same commit: Windows
+   locally, Linux on the GitHub runner with the manual workflow `record-reference` (Actions tab > record-reference >
+   Run workflow, then commit the downloaded file). The test runs the pipeline on one thread, whatever the
+   machine, because the number of threads changes the order of the sums and so the last digits of the results.
+
+**Limitation: machine-sensitive reference values.** Every random step uses a fixed seed, and on one machine the test
+gives identical results on every run. On another machine, seven reference values can differ: Mirai's OOD share before
+infection and the coverage of six stage 4 sessions (`MACHINE_SENSITIVE` in `integration_support.py`). They are shares of
+few segments from tiny models trained for a few epochs, so the last digits of a different CPU's arithmetic are enough
+to move a borderline segment. Measured on the same code and data, they moved by up to 0.10 (5 of 50 segments) across
+GitHub's Linux runners and forced CPU code paths, while every other value moved by at most 0.015. PyTorch documents
+this limit ([Reproducibility](https://docs.pytorch.org/docs/stable/notes/randomness.html), source for 2.9.0:
+[randomness.rst](https://github.com/pytorch/pytorch/blob/v2.9.0/docs/source/notes/randomness.rst)):
+
+> Completely reproducible results are not guaranteed across PyTorch releases, individual commits, or different
+> platforms.
+
+A tolerance wide enough for this noise would make these checks meaningless, so they keep their tolerance and are
+skipped in CI instead (`SKIP_MACHINE_SENSITIVE=1` in `checks.yml`; `-rs` prints the reason). Without that variable,
+for example on the machine that recorded the reference, they are compared like the others. So **a change that only
+moves these seven values is caught only when the tests run on that machine**: run `python -m pytest` there before
+pushing a change to the pipeline. The other 62 reference values, the hand-derived values and the invariants are checked
+everywhere.
+
+Two expected failures record known behavior of the pipeline, deliberately left unchanged:
+- stage 0 counts gaps as "not whole microseconds" when timestamps near 1.5e9 s, held in float64 (about 240 ns
+  resolution), are whole microseconds: the real captures store microseconds, so the counts in
+  `data/results/iat_resolution.csv` (93-97%) are this artifact; the "all inputs" key, which rounds to whole
+  microseconds, is unaffected;
+- stage 3's packet-by-packet timing path sums OOD scores in float64 while evaluation uses float32, so a score exactly
+  on an OOD limit can be decided differently; with identical first packets in a tiny archive (`synthetic_kitsune.py`)
+  its consistency check stops; on the real data it never occurred (100% agreement).
+
+`pip install -r requirements-dev.txt` (the pipeline's requirements plus pytest and pyflakes), then `python -m pytest`
+from the repository root. On GitHub,
 `.github/workflows/checks.yml` runs the same lint and tests with coverage on every push, and a SonarQube analysis
 (`sonar-project.properties`) once a `SONAR_TOKEN` secret is set.
 

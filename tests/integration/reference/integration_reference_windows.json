@@ -1,0 +1,291 @@
+{
+ "recorded": "2026-11-25 18:40:01",
+ "commit": "1487523f54bf5535f3d7d5254e6188f3b18ae294",
+ "platform": "Windows AMD64, Python 3.13.7",
+ "note": "Regression baseline: re-record only after an agreed change to the pipeline (see record_reference.py).",
+ "values": {
+  "s2 chosen size": {
+   "value": "128x2",
+   "abs": 1e-09
+  },
+  "s2 validation loss, size 64": {
+   "value": 0.0842199102044105,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s2 validation loss, size 128": {
+   "value": 0.1271276921033859,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s2 validation loss, size 128x2": {
+   "value": 0.0360396057367324,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s3 main: tau_attack, K=50": {
+   "value": 0.4988127663727277,
+   "abs": 0.05
+  },
+  "s3 main: tau_benign, K=50": {
+   "value": 0.5011872336272722,
+   "abs": 0.05
+  },
+  "s3 main: test coverage, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 main: test attacks blocked, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 main: test block precision, K=50": {
+   "value": 0.8823529411764706,
+   "abs": 0.05
+  },
+  "s3 main: test Low precision, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 main: test Medium, K=50": {
+   "value": 0.0,
+   "abs": 0.05
+  },
+  "s3 main: test OOD, K=50": {
+   "value": 0.0,
+   "abs": 0.05
+  },
+  "s3 no testbed: tau_attack, K=50": {
+   "value": 0.894030751098315,
+   "abs": 0.05
+  },
+  "s3 no testbed: tau_benign, K=50": {
+   "value": 0.5011872336272722,
+   "abs": 0.05
+  },
+  "s3 no testbed: test coverage, K=50": {
+   "value": 0.9788359788359788,
+   "abs": 0.05
+  },
+  "s3 no testbed: test attacks blocked, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 no testbed: test block precision, K=50": {
+   "value": 0.9130434782608696,
+   "abs": 0.05
+  },
+  "s3 no testbed: test Low precision, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 no testbed: test Medium, K=50": {
+   "value": 0.0,
+   "abs": 0.05
+  },
+  "s3 no testbed: test OOD, K=50": {
+   "value": 0.0211640211640211,
+   "abs": 0.05
+  },
+  "s3 no testbed: MaxAcc (headers), test, k=1": {
+   "value": 0.9629629629629628,
+   "abs": 1e-09
+  },
+  "s3 no testbed: forced accuracy, test, k=1": {
+   "value": 0.9629629629629628,
+   "abs": 0.05
+  },
+  "s3 no testbed: MaxAcc (headers), test, k=3": {
+   "value": 0.9629629629629628,
+   "abs": 1e-09
+  },
+  "s3 no testbed: forced accuracy, test, k=3": {
+   "value": 0.925925925925926,
+   "abs": 0.05
+  },
+  "s3 no testbed: MaxAcc (headers), test, k=50": {
+   "value": 0.9629629629629628,
+   "abs": 1e-09
+  },
+  "s3 no testbed: forced accuracy, test, k=50": {
+   "value": 0.925925925925926,
+   "abs": 0.05
+  },
+  "s3 main: MaxAcc (all inputs), test, k=1": {
+   "value": 1.0,
+   "abs": 1e-09
+  },
+  "s3 main: forced accuracy, test, k=1": {
+   "value": 0.925925925925926,
+   "abs": 0.05
+  },
+  "s3 main: MaxAcc (all inputs), test, k=50": {
+   "value": 1.0,
+   "abs": 1e-09
+  },
+  "s3 main: forced accuracy, test, k=50": {
+   "value": 0.925925925925926,
+   "abs": 0.05
+  },
+  "s3 no testbed: ECE, capped, test, k=50": {
+   "value": 0.0358855299755432,
+   "abs": 0.05
+  },
+  "s3 main: held-out Mirai, before infection, OOD": {
+   "value": 0.32,
+   "abs": 0.05
+  },
+  "s3 main: held-out Mirai, during infection, OOD": {
+   "value": 0.0,
+   "abs": 0.05
+  },
+  "s3 main: held-out ARP MitM, benign, OOD": {
+   "value": 0.2142857142857142,
+   "abs": 0.05
+  },
+  "s3 main: held-out ARP MitM, attack, OOD": {
+   "value": 0.0,
+   "abs": 0.05
+  },
+  "s3 baseline GRU: coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 baseline k-NN: coverage": {
+   "value": 0.9629629629629628,
+   "abs": 0.05
+  },
+  "s3 baseline XGBoost: coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 evasion none: High": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 evasion IAT jitter +/-20%: High": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s3 evasion padding up to 32 bytes: High": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s4 session without OS Scan: coverage": {
+   "value": 0.1911764705882352,
+   "abs": 0.05
+  },
+  "s4 session without Fuzzing: coverage": {
+   "value": 0.3823529411764705,
+   "abs": 0.05
+  },
+  "s4 session without Video Injection: coverage": {
+   "value": 0.3823529411764705,
+   "abs": 0.05
+  },
+  "s4 session without Active Wiretap: coverage": {
+   "value": 0.375,
+   "abs": 0.05
+  },
+  "s4 session without SSDP Flood: coverage": {
+   "value": 0.3970588235294117,
+   "abs": 0.05
+  },
+  "s4 session without SYN DoS: coverage": {
+   "value": 0.3970588235294117,
+   "abs": 0.05
+  },
+  "s4 session without SSL Renegotiation: coverage": {
+   "value": 0.3602941176470588,
+   "abs": 0.05
+  },
+  "s4 session Feb-May to Aug: coverage": {
+   "value": 0.25,
+   "abs": 0.05
+  },
+  "s4 retraining before: known test coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s4 retraining after: known test coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s4 whole flows, memory reset: coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s4 whole flows, memory carried: coverage": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s5 memory reset: test coverage, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s5 memory carried: test coverage, K=50": {
+   "value": 1.0,
+   "abs": 0.05
+  },
+  "s6 deterministic: test coverage, K=50": {
+   "value": 0.2962962962962963,
+   "abs": 0.05
+  },
+  "s6 MC average: test coverage, K=50": {
+   "value": 0.2962962962962963,
+   "abs": 0.05
+  },
+  "s6 known test traffic: mean aleatoric (bits)": {
+   "value": 0.36859061009245087,
+   "abs": 0.05
+  },
+  "s6 known test traffic: mean epistemic (bits)": {
+   "value": 0.02209294126184201,
+   "abs": 0.05
+  },
+  "s7 PSI Feb-May captures -> Aug captures, benign: frame_len": {
+   "value": 1.1840978766886263,
+   "abs": 1e-09
+  },
+  "s7 PSI Feb-May captures -> Aug captures, benign: tcp_window": {
+   "value": 0.3969040768095914,
+   "abs": 1e-09
+  },
+  "s7 PSI Feb-May captures -> Aug captures, benign: dst_port": {
+   "value": 3.609583098737229,
+   "abs": 1e-09
+  },
+  "s7 PSI Feb-May captures -> Aug captures, all: P(attack)": {
+   "value": 0.2185510881570679,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s7 PSI Feb-May captures -> Aug captures, all: answer mix": {
+   "value": 0.0388087814818515,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s7 PSI training -> held-out Mirai, benign: frame_len": {
+   "value": 4.706626919714223,
+   "abs": 1e-09
+  },
+  "s7 PSI training -> held-out Mirai, benign: tcp_window": {
+   "value": 9.355467797703426,
+   "abs": 1e-09
+  },
+  "s7 PSI training -> held-out Mirai, benign: dst_port": {
+   "value": 7.4064797176177635,
+   "abs": 1e-09
+  },
+  "s7 PSI training -> held-out Mirai, all: P(attack)": {
+   "value": 2.4667943047668617,
+   "rel": 0.25,
+   "abs": 0.05
+  },
+  "s7 PSI training -> held-out Mirai, all: answer mix": {
+   "value": 0.5552035949916339,
+   "rel": 0.25,
+   "abs": 0.05
+  }
+ }
+}

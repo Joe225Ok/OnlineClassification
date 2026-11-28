@@ -84,6 +84,59 @@ destination port and inter-arrival time). The full results are in `data/results/
 
 ## Reproducing
 
+### Release 2026-11-27
+
+The branch `release/2026-11-27` is the reproducible state of this project. It starts from commit `dff07de` of `main`.
+Work continues on `main`, and this branch only changes to fix the release itself.
+
+```
+git clone https://github.com/Joe225Ok/OnlineClassification.git
+cd OnlineClassification
+git switch release/2026-11-27
+python -m venv .venv                     # Python 3.13; then activate it
+pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cpu
+pip install -r requirements-dev.txt      # pinned versions; includes requirements.txt
+python -m pytest                         # unit and integration tests, about a minute and a half, no dataset needed
+cd src/Project
+python run_all.py --jobs 2               # the full pipeline, as the published results were run
+```
+
+- **Versions:** `requirements.txt` pins every library. The full package list of the published run is in
+  `data/results/environment_published.txt`.
+- **Same results:** the published run used `--jobs 2` with 4 threads per step, on a CPU with AVX2. The environment
+  file says bit-identical results need the same `--jobs` and the same CPU instruction set. On another CPU, expect
+  small differences in the last digits.
+- **Code of the published results:** the run's own record names no commit. The run started on 2026-11-21 at 02:14,
+  22 minutes after commit `d653af3`. From `d653af3` to this release, the pipeline code changed only in comments (in
+  `pipeline/s0_prepare.py`). So this release runs the same code as the published run, if that run used `d653af3`
+  without local changes. The record cannot confirm this last point.
+- **Check without the dataset:** the integration test compares 69 outputs with the reference files in
+  `tests/integration/reference/` (see [Tests](#tests)). This checks the code, not the published numbers: only a full
+  rerun on the dataset can confirm those. The Windows file is recorded from commit `dff07de`. The
+  Linux file is recorded on the GitHub runner from commit `ced4535`, an earlier version that is no longer in the
+  public history (it was amended). From `ced4535` to `dff07de`, the pipeline code and the test data did not change,
+  only comments, file paths and the list of machine-sensitive values. So both files belong to this release's code.
+  On a CPU other than the one that recorded them, set `SKIP_MACHINE_SENSITIVE=1` to skip the seven values that
+  change with the CPU, as CI does (`SKIP_MACHINE_SENSITIVE=1 python -m pytest` in bash,
+  `$env:SKIP_MACHINE_SENSITIVE="1"; python -m pytest` in PowerShell). CI passed on `dff07de` with both files.
+- **Full rerun:** delete `data/models_v2`, `data/results` and `data/tracks` to recompute everything from the dataset
+  (see [Dataset](#dataset); about 15 hours, see below). Without deleting them, `run_all.py` reuses the cached models
+  and parsed data and recomputes the rest (see [What a run overwrites](#what-a-run-overwrites)).
+
+#### How the release was made
+
+```
+git switch -c release/2026-11-27 dff07de     # branch from main after CI passed
+# README: this section; Windows reference re-recorded from dff07de (values unchanged)
+git add README.md tests/integration/reference/integration_reference_windows.json
+git commit
+git push -u origin release/2026-11-27
+git tag v2026-11-27                         # marks the exact release commit
+git push origin v2026-11-27
+```
+
+To get exactly this release later, even if the branch gets a fix: `git switch --detach v2026-11-27`.
+
 Every random step uses `SEED = 0`. Dependencies are listed in `requirements.txt` at the repository root (`pip install -r requirements.txt`, Python 3.13). The environment the results were produced in (library versions, thread
 settings and the full package list) is in `data/results/environment_published.txt`. It is a copy of the run's own record,
 with the local path removed and the machine described in general terms. Trained models and results
@@ -144,7 +197,7 @@ kept in the temporary folder so they never write to `data/` (`integration_suppor
    results have not changed, not that they are right. They are written only by
    `python tests/integration/record_reference.py`, which records the commit and platform; re-record only after an
    agreed change to the pipeline, never to make a failing test pass. Trained models give slightly different numbers on Windows and Linux (different low-level code
-   in PyTorch and the math libraries), so each platform has its own file, recorded from the same commit: Windows
+   in PyTorch and the math libraries), so each platform has its own file, recorded from the same pipeline code: Windows
    locally, Linux on the GitHub runner with the manual workflow `record-reference` (Actions tab > record-reference >
    Run workflow, then commit the downloaded file). The test runs the pipeline on one thread, whatever the
    machine, because the number of threads changes the order of the sums and so the last digits of the results.

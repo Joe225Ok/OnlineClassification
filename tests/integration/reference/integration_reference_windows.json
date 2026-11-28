@@ -1,6 +1,6 @@
 {
- "recorded": "2026-11-25 18:40:01",
- "commit": "1487523f54bf5535f3d7d5254e6188f3b18ae294",
+ "recorded": "2026-11-27 22:00:22",
+ "commit": "dff07de2d86be11758e68dd41ee22e5e461e7256",
  "platform": "Windows AMD64, Python 3.13.7",
  "note": "Regression baseline: re-record only after an agreed change to the pipeline (see record_reference.py).",
  "values": {

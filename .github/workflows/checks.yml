@@ -1,10 +1,13 @@
-# Tests, lint and coverage on every push and pull request, then a SonarQube Cloud analysis with that coverage.
-# The tests need no data files (tests/ builds every input by hand), so they run on a plain runner.
+# Tests, lint and coverage on every push to a branch and every pull request, then a SonarQube Cloud analysis with that
+# coverage. Tag pushes do not run it: SonarQube Cloud filed the analysis of tag v2026-11-27 under main, which then
+# showed a commit that is not on main. The tests need no data files (tests/ builds every input by hand), so they run
+# on a plain runner.
 # Actions are pinned to the commit of a release (the comment names it): a moved tag cannot change what runs.
 name: checks
 
 on:
   push:
+    branches: ['**']  # branches only: with a branch filter and no tag filter, a tag push does not run the workflow
   pull_request:
     types: [opened, synchronize, reopened]
 

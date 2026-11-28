@@ -84,6 +84,16 @@ destination port and inter-arrival time). The full results are in `data/results/
 
 ## Reproducing
 
+Work on this project continues on the `main` branch, so its code and results may change. To reproduce the results as
+of 27 November 2026, use the release of that day: the tag `v2026-11-27` (branch `release/2026-11-27`). Its README
+gives the steps.
+
+```
+git clone https://github.com/Joe225Ok/OnlineClassification.git
+cd OnlineClassification
+git switch --detach v2026-11-27
+```
+
 Every random step uses `SEED = 0`. Dependencies are listed in `requirements.txt` at the repository root (`pip install -r requirements.txt`, Python 3.13). The environment the results were produced in (library versions, thread
 settings and the full package list) is in `data/results/environment_published.txt`. It is a copy of the run's own record,
 with the local path removed and the machine described in general terms. Trained models and results

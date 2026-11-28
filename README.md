@@ -118,8 +118,9 @@ stays until you delete it. Artifact folders are written under a temporary name a
 
 ### Tests
 
-`tests/` holds unit tests of each component and one integration test of the whole pipeline. None needs the dataset;
-together they take about a minute and a half.
+`tests/unit/` holds unit tests of each component and `tests/integration/` one integration test of the whole pipeline
+(`tests/conftest.py` sets the working directory and import path for both). None needs the dataset; together they take
+about a minute and a half. `python -m pytest tests/unit` or `python -m pytest tests/integration` runs one kind only.
 
 **Unit tests** check each component on its own, on inputs built by hand, with every expected value worked out from how
 the input was built:
@@ -140,9 +141,9 @@ kept in the temporary folder so they never write to `data/` (`integration_suppor
    the uncertainty parts add up, `infer.py` on the raw capture reproduces the answers stage 3 measured, and so on;
 3. reference values: 69 model and data outputs compared, within a tolerance, with
    `reference/integration_reference_<system>.json`, one file per operating system (`windows`, `linux`). They show that
-   results have not changed, not that they are right. They are written only by `python tests/record_reference.py`,
-   which records the commit and platform; re-record only after an agreed change to the pipeline, never to make a
-   failing test pass. Trained models give slightly different numbers on Windows and Linux (different low-level code
+   results have not changed, not that they are right. They are written only by
+   `python tests/integration/record_reference.py`, which records the commit and platform; re-record only after an
+   agreed change to the pipeline, never to make a failing test pass. Trained models give slightly different numbers on Windows and Linux (different low-level code
    in PyTorch and the math libraries), so each platform has its own file, recorded from the same commit: Windows
    locally, Linux on the GitHub runner with the manual workflow `record-reference` (Actions tab > record-reference >
    Run workflow, then commit the downloaded file). The test runs the pipeline on one thread, whatever the

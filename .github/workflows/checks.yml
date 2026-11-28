@@ -1,4 +1,4 @@
-# Unit tests, lint and coverage on every push and pull request, then a SonarQube Cloud analysis with that coverage.
+# Tests, lint and coverage on every push and pull request, then a SonarQube Cloud analysis with that coverage.
 # The tests need no data files (tests/ builds every input by hand), so they run on a plain runner.
 # Actions are pinned to the commit of a release (the comment names it): a moved tag cannot change what runs.
 name: checks
@@ -41,9 +41,9 @@ jobs:
         run: python -m pyflakes src/Project/kitsune_lib.py src/Project/run_all.py src/Project/safeguard.py src/Project/pipeline tests
 
       # SKIP_MACHINE_SENSITIVE: GitHub runners differ in CPU, which moves seven reference values of the integration test
-      # (tests/integration_support.py, MACHINE_SENSITIVE). They are skipped here and -rs prints why; the other reference
-      # values are compared as usual.
-      - name: Unit tests with coverage
+      # (tests/integration/integration_support.py, MACHINE_SENSITIVE). They are skipped here and -rs prints why; the
+      # other reference values are compared as usual.
+      - name: Tests with coverage
         env:
           SKIP_MACHINE_SENSITIVE: "1"
         run: python -m pytest -q -rs --cov=src/Project --cov-report=xml:coverage.xml --cov-report=term

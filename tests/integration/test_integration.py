@@ -1,15 +1,16 @@
 """Integration test: every pipeline script, unchanged, on a crafted archive with the edge cases of the real data
-(tests/edge_case_data.py), in a temporary folder (see tests/integration_support.py for the only differences from a
-real run). Three kinds of checks:
+(tests/integration/edge_case_data.py), in a temporary folder (see tests/integration/integration_support.py for the only
+differences from a real run). Three kinds of checks:
 
   1. Hand-derived values: what the data stages must produce, worked out from the dataset's specification (packets,
      flows, segments and their labels, the time split, the conflicts Track B drops, the held-out groups), never from a
      run of the code.
   2. Invariants: rules every model stage must satisfy whatever the numbers are (targets met where met, coverage is the
      share answered, uncertainty parts add up, infer.py reproduces stage 3, ...).
-  3. Reference values: model outputs compared, within a tolerance, with tests/reference/integration_reference_<system>.json
-     (one per operating system), recorded from the agreed code by tests/record_reference.py. They show that results have not changed, not that
-     they are right; re-record only after an agreed change to the pipeline, never to make this test pass.
+  3. Reference values: model outputs compared, within a tolerance, with
+     tests/integration/reference/integration_reference_<system>.json (one per operating system), recorded from the
+     agreed code by tests/integration/record_reference.py. They show that results have not changed, not that they are
+     right; re-record only after an agreed change to the pipeline, never to make this test pass.
      Seven of them are machine-sensitive (integration_support.MACHINE_SENSITIVE): with SKIP_MACHINE_SENSITIVE=1, as in
      CI, they are skipped with the reason shown; otherwise they are compared like the others.
 
@@ -264,7 +265,7 @@ def collected(run):
 
 
 def test_the_reference_covers_every_collected_value(collected):
-    assert REFERENCE_VALUES, f"{REFERENCE} is missing: run tests/record_reference.py on the agreed code"
+    assert REFERENCE_VALUES, f"{REFERENCE} is missing: run tests/integration/record_reference.py on the agreed code"
     assert set(collected) == set(REFERENCE_VALUES)
     assert MACHINE_SENSITIVE <= set(collected)  # a renamed value must not silently leave the list
 

@@ -1,7 +1,8 @@
 # Records the Linux reference of the integration test on the same runner and installation as the checks workflow.
 # Run it by hand (Actions > record-reference > Run workflow) only after an agreed change to the pipeline, on the same
 # commit the Windows reference was recorded from. Download the artifact and commit
-# tests/reference/integration_reference_linux.json. Actions are pinned to the commit of a release (the comment names it).
+# tests/integration/reference/integration_reference_linux.json. Actions are pinned to the commit of a release (the
+# comment names it).
 name: record-reference
 
 on:
@@ -32,10 +33,10 @@ jobs:
           python -m threadpoolctl -i numpy scipy torch
 
       - name: Record the reference
-        run: python tests/record_reference.py
+        run: python tests/integration/record_reference.py
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: integration-reference-linux
-          path: tests/reference/integration_reference_linux.json
+          path: tests/integration/reference/integration_reference_linux.json
           if-no-files-found: error

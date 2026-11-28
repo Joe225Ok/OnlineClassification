@@ -1,8 +1,8 @@
-"""What the integration test and tests/record_reference.py share: running every pipeline script, unchanged, on a crafted
-archive in a temporary folder, and reading the values compared with the recorded reference.
+"""What the integration test and tests/integration/record_reference.py share: running every pipeline script, unchanged,
+on a crafted archive in a temporary folder, and reading the values compared with the recorded reference.
 
 Only four things differ from a real run:
-  - the data: a small crafted archive (tests/edge_case_data.py) instead of the 19 GB one;
+  - the data: a small crafted archive (tests/integration/edge_case_data.py) instead of the 19 GB one;
   - the training budget: tiny GRUs, at most 8 epochs, patience 2, batches of 32, learning rate 0.02 (kitsune_lib's
     constants, patched while the pipeline runs);
   - one thread, whatever the machine: PyTorch and the BLAS and OpenMP pools of numpy, scipy and scikit-learn. The
@@ -34,8 +34,9 @@ PIPELINE = PROJECT / "pipeline"
 ARCHIVE = "kitsune+network+attack+dataset.zip"
 # One reference per operating system: PyTorch and the math libraries run different low-level code on Windows and Linux,
 # and on these tiny models that is enough to move a few borderline segments (one thread removes only the differences
-# that come from the number of cores). Each file is recorded on its own platform by tests/record_reference.py from
-# the same agreed code. Linux: recorded on the GitHub runner (.github/workflows/record-reference.yml).
+# that come from the number of cores). Each file is recorded on its own platform by
+# tests/integration/record_reference.py from the same agreed code. Linux: recorded on the GitHub runner
+# (.github/workflows/record-reference.yml).
 REFERENCE = Path(__file__).resolve().parent / "reference" / f"integration_reference_{platform.system().lower()}.json"
 REAL_CHDIR = os.chdir  # kept before anything replaces os.chdir
 STAGES = ["s0_prepare", "s1_data", "s2_models", "s3_evaluate", "s4_experiments", "s5_stateful", "export_artifacts",

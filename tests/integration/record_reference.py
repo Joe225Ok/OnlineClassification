@@ -1,10 +1,11 @@
 """Record the reference values of the integration test for this operating system
-(tests/reference/integration_reference_<system>.json: windows, linux, ...).
+(tests/integration/reference/integration_reference_<system>.json: windows, linux, ...).
 
-    python tests/record_reference.py          (from the repository root)
+    python tests/integration/record_reference.py          (from the repository root)
 
-It runs every pipeline script on the crafted archive (tests/edge_case_data.py), exactly as the integration test does,
-and writes the values tests/integration_support.collect() reads, with their tolerances, the commit and the platform.
+It runs every pipeline script on the crafted archive (tests/integration/edge_case_data.py), exactly as the integration
+test does, and writes the values tests/integration/integration_support.collect() reads, with their tolerances, the
+commit and the platform.
 
 The reference is a regression baseline: it shows that results have not changed, not that they are right (the
 hand-derived checks and the invariants of the integration test do that). Re-record only after a change to the
@@ -22,7 +23,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE), str(HERE.parent / "src" / "Project")]
+sys.path[:0] = [str(HERE), str(HERE.parent.parent / "src" / "Project")]
 
 import edge_case_data  # noqa: E402
 from integration_support import REFERENCE, collect, isolated_pipeline  # noqa: E402
